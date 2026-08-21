@@ -1,0 +1,13 @@
+{
+  "name": "webhook-app",
+  "version": "1.0.0",
+  "description": "Webhook con arquitectura en capas (routes, controllers, services, repositories)",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2"
+  }
+}
