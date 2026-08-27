@@ -126,6 +126,29 @@ Authenticated UI endpoints:
 | `GET /conversations` | List conversations |
 | `GET /conversations/:id/messages` | List messages |
 | `POST /conversations/:id/messages/text` | Queue `{ "body": "..." }` for delivery |
+| `POST /conversations/:id/messages/document` | Queue a reusable Meta document `{ "mediaId": "...", "filename": "...", "caption": "..." }` |
+| `POST /settings/catalog-document` | Owner/admin configures the reusable catalog Media ID and automatic trigger |
+
+### Reusable catalog document
+
+Upload your PDF to Meta once using its Media API and keep the returned Media ID.
+Then, with an authenticated owner/admin session, configure it in this API:
+
+```json
+POST /settings/catalog-document
+{
+  "mediaId": "META_MEDIA_ID",
+  "filename": "catalogo.pdf",
+  "caption": "Aquí está nuestro catálogo.",
+  "triggerPhrase": "Quisiera ver el catalogo"
+}
+```
+
+When a new inbound text contains that phrase (case, accents, and punctuation are ignored), the
+worker queues a document message using the stored Media ID. The same document
+can also be sent manually to any conversation through
+`POST /conversations/:id/messages/document`. Meta media IDs can expire or be
+deleted; configure a replacement ID if Meta rejects a later send.
 
 The worker reads queued outbound messages, calls Meta, and changes their state to
 `sent` or `failed`. This is the path the UI should use; the `/messages/*` endpoints

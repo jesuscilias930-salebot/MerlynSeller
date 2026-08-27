@@ -37,3 +37,11 @@ exports.sendText = async (req, res, next) => {
         return handle(error, res, next); 
     } 
 };
+
+exports.sendDocument = async (req, res, next) => {
+    try {
+        return res.status(202).json(await conversations.queueDocument(req.auth.organizationId, req.params.id, req.body));
+    } catch (error) {
+        return handle(error, res, next);
+    }
+};

@@ -6,4 +6,5 @@ router.get('/', controller.list);
 router.post('/', controller.create);
 router.get('/:id/messages', controller.messages);
 router.post('/:id/messages/text', controller.sendText);
+router.post('/:id/messages/document', controller.sendDocument);
 module.exports = router;

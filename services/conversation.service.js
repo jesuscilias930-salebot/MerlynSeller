@@ -5,6 +5,11 @@ const { outboundQueue } = require('../lib/queue');
 const phone = z.string().trim().transform((value) => value.replace(/^\+/, '')).refine((value) => /^\d{8,15}$/.test(value), 'phoneNumber must be E.164');
 const createSchema = z.object({ phoneNumber: phone, name: z.string().trim().max(120).optional() });
 const textSchema = z.object({ body: z.string().trim().min(1).max(4096) });
+const documentSchema = z.object({
+  mediaId: z.string().trim().min(1).max(256),
+  filename: z.string().trim().min(1).max(240).optional(),
+  caption: z.string().trim().max(1024).optional(),
+});
 
 const validation = (schema, value) => {
   const parsed = schema.safeParse(value);
@@ -28,4 +33,15 @@ exports.queueText = async (organizationId, conversationId, input) => {
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add('send-text', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
   return { id: result.rows[0].id, status: 'pending' };
+};
+
+exports.queueDocument = async (organizationId, conversationId, input) => {
+  const data = validation(documentSchema, input);
+  const result = await db.query(
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, filename, status) SELECT $1, id, 'outbound', 'document', $3, $4, $5, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
+    [organizationId, conversationId, data.caption || null, data.mediaId, data.filename || null],
+  );
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  await outboundQueue().add('send-document', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
+  return { id: result.rows[0].id, status: 'pending', type: 'document' };
 };
