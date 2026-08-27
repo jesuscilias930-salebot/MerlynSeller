@@ -29,7 +29,15 @@ exports.createSession = async (accessToken) => {
 };
 
 exports.sessionCookie = sessionCookie;
-exports.cookieOptions = (expiresAt) => ({ httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', expires: expiresAt, path: '/' });
+exports.cookieOptions = (expiresAt) => ({
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  // The deployed UI and API use different Render subdomains. Modern browsers
+  // require SameSite=None (with Secure) to include this cookie on UI API calls.
+  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  expires: expiresAt,
+  path: '/',
+});
 exports.getSession = async (token) => {
   if (!token) return null;
   const result = await db.query('SELECT s.organization_id, u.id, u.email, m.role FROM app_sessions s JOIN users u ON u.id = s.user_id JOIN memberships m ON m.user_id = u.id AND m.organization_id = s.organization_id WHERE s.token_hash = $1 AND s.expires_at > now()', [hash(token)]);

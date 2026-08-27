@@ -15,6 +15,21 @@ app.disable('x-powered-by');
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || false, credentials: true }));
 app.use(cookieParser());
 
+// A SameSite=None session cookie is required when the UI and API are hosted on
+// different domains. Reject browser requests from an unexpected Origin before
+// they can perform a session-based state change. Requests without an Origin
+// remain available for server-to-server integrations and Postman testing.
+const browserSessionPaths = ['/auth', '/conversations', '/settings'];
+const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+app.use((req, res, next) => {
+  const isBrowserSessionRequest = browserSessionPaths.some((path) => req.path === path || req.path.startsWith(`${path}/`));
+  const origin = req.get('origin');
+  if (isBrowserSessionRequest && unsafeMethods.has(req.method) && origin && origin !== process.env.FRONTEND_ORIGIN) {
+    return res.status(403).json({ error: 'Request origin is not allowed' });
+  }
+  next();
+});
+
 if (process.env.NODE_ENV === 'production') {
   const missingSecrets = [
     'VERIFY_TOKEN',
