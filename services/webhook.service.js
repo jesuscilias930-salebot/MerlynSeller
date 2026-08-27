@@ -1,15 +1,33 @@
-const { log } = require('node:console');
+const crypto = require('node:crypto');
 const eventRepository = require('../repositories/event.repository');
 
-// Valida el modo y token contra el verify_token configurado
-exports.isValidToken = (mode, token) => {
-  console.log("log on valid ", mode, token, process.env.VERIFY_TOKEN);
-  return mode === 'subscribe' && token === process.env.VERIFY_TOKEN;
+const safeEqual = (received, expected) => {
+  if (typeof received !== 'string' || typeof expected !== 'string') return false;
+  const receivedBuffer = Buffer.from(received);
+  const expectedBuffer = Buffer.from(expected);
+  return receivedBuffer.length === expectedBuffer.length
+    && crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
 };
 
-// Procesa el evento recibido del webhook
-exports.processEvent = async (body) => {
-  // Aquí puedes agregar lógica de negocio en el futuro:
-  // parsear el tipo de mensaje, validar estructura, etc.
-  await eventRepository.save(body);
+exports.isValidToken = (mode, token) => (
+  mode === 'subscribe' && safeEqual(token, process.env.VERIFY_TOKEN)
+);
+
+exports.isValidSignature = (rawBody, signatureHeader) => {
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appSecret || !Buffer.isBuffer(rawBody) || typeof signatureHeader !== 'string') return false;
+
+  const match = /^sha256=([a-f0-9]{64})$/i.exec(signatureHeader);
+  if (!match) return false;
+
+  const expectedSignature = crypto
+    .createHmac('sha256', appSecret)
+    .update(rawBody)
+    .digest('hex');
+  return safeEqual(match[1].toLowerCase(), expectedSignature);
+};
+
+exports.processEvent = async (body, rawBody) => {
+  const eventKey = crypto.createHash('sha256').update(rawBody).digest('hex');
+  return eventRepository.save(body, eventKey);
 };

@@ -1,0 +1,9 @@
+const router = require('express').Router();
+const controller = require('../controllers/conversation.controller');
+const { requireUser } = require('../middleware/auth.middleware');
+router.use(requireUser);
+router.get('/', controller.list);
+router.post('/', controller.create);
+router.get('/:id/messages', controller.messages);
+router.post('/:id/messages/text', controller.sendText);
+module.exports = router;

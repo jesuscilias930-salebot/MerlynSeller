@@ -1,0 +1,99 @@
+services:
+  - type: web
+    name: merlynsales-api
+    runtime: docker
+    region: virginia
+    plan: starter
+    healthCheckPath: /health
+    preDeployCommand: npm run migrate
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "true"
+      - key: REQUIRE_HTTPS
+        value: "true"
+      - key: DATABASE_SSL
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: merlynsales-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: merlynsales-redis
+          type: keyvalue
+          property: connectionString
+      - key: WORKER_CONCURRENCY
+        value: "5"
+      - key: SESSION_TTL_MS
+        value: "28800000"
+      - key: WEBHOOK_MAX_BODY_SIZE
+        value: 256kb
+      - key: WEBHOOK_DEDUPLICATION_TTL_MS
+        value: "86400000"
+      - key: VERIFY_TOKEN
+        generateValue: true
+      - key: OUTBOUND_API_KEY
+        generateValue: true
+      - key: META_APP_SECRET
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_GRAPH_API_VERSION
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+
+  - type: worker
+    name: merlynsales-worker
+    runtime: docker
+    region: virginia
+    plan: starter
+    dockerCommand: npm run worker
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_SSL
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: merlynsales-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: merlynsales-redis
+          type: keyvalue
+          property: connectionString
+      - key: WORKER_CONCURRENCY
+        value: "5"
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_GRAPH_API_VERSION
+        sync: false
+
+  - type: keyvalue
+    name: merlynsales-redis
+    region: virginia
+    plan: starter
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+databases:
+  - name: merlynsales-db
+    region: virginia
+    plan: basic-256mb
+    databaseName: merlynsales
+    user: merlynsales
+    postgresMajorVersion: "16"
+    ipAllowList: []

@@ -1,9 +1,34 @@
-// Por ahora no hay base de datos: los eventos solo se registran en consola.
-// El día que se agregue una BD (MongoDB, Postgres, etc.), solo este archivo
-// necesita cambiar; el resto de las capas no se ven afectadas.
+// This cache prevents duplicate work during retries in one process. Replace it
+// with Redis/Postgres before adding side effects or running multiple containers.
+const processedEvents = new Map();
+const DEDUPLICATION_TTL_MS = Number(process.env.WEBHOOK_DEDUPLICATION_TTL_MS || 24 * 60 * 60 * 1000);
 
-exports.save = async (event) => {
-  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
-  console.log(`\n\nWebhook received ${timestamp}\n`);
-  console.log(JSON.stringify(event, null, 2));
+const countChanges = (event) => event?.entry?.reduce((count, entry) => (
+  count + (entry?.changes?.length || 0)
+), 0) || 0;
+
+const pruneExpiredEvents = (now) => {
+  for (const [key, expiresAt] of processedEvents) {
+    if (expiresAt <= now) processedEvents.delete(key);
+  }
+};
+
+exports.save = async (event, eventKey) => {
+  const now = Date.now();
+  pruneExpiredEvents(now);
+  if (processedEvents.has(eventKey)) {
+    console.log(JSON.stringify({ level: 'info', message: 'Duplicate webhook ignored' }));
+    return { duplicate: true };
+  }
+
+  processedEvents.set(eventKey, now + DEDUPLICATION_TTL_MS);
+  // Never log payloads: WhatsApp events can contain message content and PII.
+  console.log(JSON.stringify({
+    level: 'info',
+    message: 'Webhook accepted',
+    object: event?.object || 'unknown',
+    entries: event?.entry?.length || 0,
+    changes: countChanges(event),
+  }));
+  return { duplicate: false };
 };

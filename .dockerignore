@@ -1,0 +1,36 @@
+# Dependencies are installed inside the image.
+node_modules/
+
+# Never copy credentials or local configuration into an image.
+.env
+.env.*
+*.pem
+*.key
+
+# Source-control and editor metadata.
+.git/
+.gitignore
+.DS_Store
+.vscode/
+.idea/
+
+# Documentation and deployment files are not needed at runtime.
+README.md
+docker-compose.yml
+render.yaml
+examples/
+
+# Local-only generated files.
+coverage/
+.nyc_output/
+dist/
+build/
+logs/
+*.log
+npm-debug.log*
+
+# Local databases, backups, and the separate UI source.
+postgres-data/
+*.dump
+*.sql.gz
+ui/

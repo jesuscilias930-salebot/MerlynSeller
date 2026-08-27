@@ -1,0 +1,47 @@
+{
+  "text": {
+    "endpoint": "POST /messages/text",
+    "body": {
+      "to": "5215555555555",
+      "body": "Hola, gracias por escribirnos.",
+      "previewUrl": false
+    }
+  },
+  "video": {
+    "endpoint": "POST /messages/video",
+    "body": {
+      "to": "5215555555555",
+      "id": "META_MEDIA_ID",
+      "caption": "Te compartimos este video."
+    }
+  },
+  "document": {
+    "endpoint": "POST /messages/document",
+    "body": {
+      "to": "5215555555555",
+      "link": "https://tu-dominio.com/catalogo.pdf",
+      "filename": "catalogo.pdf",
+      "caption": "Aquí está el catálogo solicitado."
+    }
+  },
+  "attachment": {
+    "endpoint": "POST /messages/attachment",
+    "body": {
+      "to": "5215555555555",
+      "type": "image",
+      "link": "https://tu-dominio.com/promocion.jpg",
+      "caption": "Promoción de esta semana."
+    }
+  },
+  "ctaUrl": {
+    "endpoint": "POST /messages/cta-url",
+    "body": {
+      "to": "5215555555555",
+      "header": "Merlyn Sales",
+      "body": "Consulta nuestro catálogo en línea.",
+      "footer": "Disponible las 24 horas.",
+      "buttonText": "Abrir catálogo",
+      "url": "https://tu-dominio.com/catalogo"
+    }
+  }
+}

@@ -1,5 +1,5 @@
 # Imagen base ligera de Node.js
-FROM node:20-alpine
+FROM node:24-alpine
 
 # Carpeta de trabajo dentro del contenedor
 WORKDIR /app
@@ -10,10 +10,12 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instala solo dependencias de producción
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 # Copia el resto del código fuente
-COPY . .
+COPY --chown=node:node . .
+
+USER node
 
 # Puerto en el que escucha la app (debe coincidir con la variable PORT)
 EXPOSE 3000
