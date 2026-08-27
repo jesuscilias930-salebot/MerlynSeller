@@ -12,12 +12,21 @@ const saveMessage = async (organizationId, message) => {
     return conversation.rows[0].id;
   });
   await realtime.publish(organizationId, 'message.received', conversationId);
+  console.log(JSON.stringify({
+    level: 'info',
+    message: 'Incoming WhatsApp message stored',
+    messageType: message.type || 'unknown',
+    conversationId,
+  }));
 };
 
 const updateStatus = async (status) => {
   if (!status.id || !['sent', 'delivered', 'read', 'failed'].includes(status.status)) return;
   const result = await db.query('UPDATE messages SET status = $2, updated_at = now() WHERE provider_message_id = $1 RETURNING organization_id, conversation_id', [status.id, status.status]);
-  if (result.rows[0]) await realtime.publish(result.rows[0].organization_id, 'message.status_updated', result.rows[0].conversation_id);
+  if (result.rows[0]) {
+    await realtime.publish(result.rows[0].organization_id, 'message.status_updated', result.rows[0].conversation_id);
+    console.log(JSON.stringify({ level: 'info', message: 'WhatsApp message status updated', status: status.status, conversationId: result.rows[0].conversation_id }));
+  }
 };
 
 exports.process = async (payload) => {

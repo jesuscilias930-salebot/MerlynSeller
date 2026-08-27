@@ -22,6 +22,10 @@ const outbound = new Worker('outbound-messages', async (job) => {
 }, { connection: connection(), concurrency: Number(process.env.WORKER_CONCURRENCY || 5) });
 
 outbound.on('failed', (job, error) => console.error(JSON.stringify({ level: 'error', queue: 'outbound-messages', jobId: job?.id, errorType: error.name })));
-const inbound = new Worker('inbound-webhooks', async (job) => inboundMessageService.process(job.data.payload), { connection: connection(), concurrency: Number(process.env.WORKER_CONCURRENCY || 5) });
+const inbound = new Worker('inbound-webhooks', async (job) => {
+  console.log(JSON.stringify({ level: 'info', message: 'Processing inbound webhook', jobId: job.id }));
+  await inboundMessageService.process(job.data.payload);
+  console.log(JSON.stringify({ level: 'info', message: 'Inbound webhook processed', jobId: job.id }));
+}, { connection: connection(), concurrency: Number(process.env.WORKER_CONCURRENCY || 5) });
 inbound.on('failed', (job, error) => console.error(JSON.stringify({ level: 'error', queue: 'inbound-webhooks', jobId: job?.id, errorType: error.name })));
 console.log(JSON.stringify({ level: 'info', message: 'Worker listening for outbound messages' }));
