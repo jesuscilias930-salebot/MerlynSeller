@@ -37,6 +37,7 @@ const intentSchema = z.object({
   priority: z.number().int().min(0).max(1000).default(0),
 }).superRefine((value, ctx) => { if (value.action === 'text' && !value.responseBody) ctx.addIssue({ code: 'custom', message: 'responseBody is required for text automations' }); });
 const parse = (input) => { const result = intentSchema.safeParse(input); if (result.success) return result.data; const error = new Error(result.error.issues[0].message); error.status = 400; throw error; };
+const log = (level, message, fields = {}) => console.log(JSON.stringify({ level, message, ...fields }));
 
 exports.list = async (organizationId) => (await db.query('SELECT id, key, name, response_body AS "responseBody", action, examples, is_active AS "isActive", priority, created_at, updated_at FROM automation_intents WHERE organization_id = $1 ORDER BY priority DESC, name ASC', [organizationId])).rows;
 exports.create = async (organizationId, input) => {
@@ -54,13 +55,38 @@ exports.update = async (organizationId, id, input) => {
 exports.remove = async (organizationId, id) => { const result = await db.query('DELETE FROM automation_intents WHERE id=$1 AND organization_id=$2 RETURNING id', [id, organizationId]); if (!result.rows[0]) { const error = new Error('Automation not found'); error.status = 404; throw error; } return { deleted: true }; };
 
 const aiDetect = async (text, intents) => {
-  if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_AUTOMATION_MODEL) return [];
+  if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_AUTOMATION_MODEL) {
+    log('warn', 'Automation AI skipped: OpenAI is not configured', {
+      hasApiKey: Boolean(process.env.OPENAI_API_KEY),
+      hasModel: Boolean(process.env.OPENAI_AUTOMATION_MODEL),
+    });
+    return [];
+  }
   try {
+    log('info', 'Automation AI classification requested', {
+      model: process.env.OPENAI_AUTOMATION_MODEL,
+      intentCount: intents.length,
+    });
     const response = await fetch('https://api.openai.com/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: process.env.OPENAI_AUTOMATION_MODEL, store: false, instructions: 'Classify the Spanish customer message using only the provided intent keys. Return intent keys that are explicitly requested. Never create keys.', input: `Intents: ${JSON.stringify(intents.map((intent) => ({ key: intent.key, examples: intent.examples })))}\nMessage: ${text}`, text: { format: { type: 'json_schema', name: 'intent_classification', strict: true, schema: { type: 'object', properties: { keys: { type: 'array', items: { type: 'string' } }, confidence: { type: 'number' } }, required: ['keys', 'confidence'], additionalProperties: false } } } }), signal: AbortSignal.timeout(8000) });
-    if (!response.ok) return [];
-    const body = await response.json(); const parsed = JSON.parse(body.output_text || '{}');
-    return parsed.confidence >= 0.8 ? intents.filter((intent) => parsed.keys.includes(intent.key)).map((intent) => ({ intent, confidence: parsed.confidence })) : [];
-  } catch { return []; }
+    const body = await response.json();
+    if (!response.ok || body.error) {
+      log('warn', 'Automation AI request failed', {
+        status: response.status,
+        errorCode: body.error?.code || 'unknown',
+      });
+      return [];
+    }
+    const parsed = JSON.parse(body.output_text || '{}');
+    const matches = parsed.confidence >= 0.8 ? intents.filter((intent) => parsed.keys.includes(intent.key)).map((intent) => ({ intent, confidence: parsed.confidence })) : [];
+    log('info', 'Automation AI classification completed', {
+      confidence: parsed.confidence || 0,
+      matchedIntentCount: matches.length,
+    });
+    return matches;
+  } catch (error) {
+    log('warn', 'Automation AI classification failed', { errorType: error.name });
+    return [];
+  }
 };
 
 exports.processIncoming = async (organizationId, conversationId, message) => {
@@ -72,6 +98,7 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   let matches = active.map((intent) => ({ intent, confidence: ruleScore(text, intent.examples || []) })).filter((match) => match.confidence >= 0.72);
   let source = 'rules';
   if (!matches.length) { matches = await aiDetect(text, active); source = matches.length ? 'ai' : 'none'; }
+  log('info', 'Automation intent evaluated', { source, matchedIntentCount: matches.length });
   const unique = [...new Map(matches.sort((a, b) => b.intent.priority - a.intent.priority).map((match) => [match.intent.id, match])).values()];
   const event = await db.query('INSERT INTO automation_events (organization_id, conversation_id, inbound_provider_message_id, detected_intents, source, confidence, outcome) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (inbound_provider_message_id) DO NOTHING RETURNING id', [organizationId, conversationId, message.id, JSON.stringify(unique.map((match) => match.intent.key)), source, unique[0]?.confidence || null, unique.length ? 'queued' : 'no_match']);
   if (!event.rows[0] || !unique.length) return;
