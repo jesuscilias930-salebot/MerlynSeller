@@ -1,6 +1,7 @@
 const db = require('../lib/db');
 const realtime = require('../lib/realtime');
 const conversations = require('./conversation.service');
+const leads = require('./lead.service');
 
 const textFor = (message) => message.text?.body || message.caption || `[${message.type || 'message'}]`;
 
@@ -8,7 +9,8 @@ const saveMessage = async (organizationId, message) => {
   if (!message.id || !message.from) return;
   const result = await db.transaction(async (client) => {
     const contact = await client.query('INSERT INTO contacts (organization_id, phone_number) VALUES ($1, $2) ON CONFLICT (organization_id, phone_number) DO UPDATE SET updated_at = now() RETURNING id', [organizationId, message.from]);
-    const conversation = await client.query("INSERT INTO conversations (organization_id, contact_id) VALUES ($1, $2) ON CONFLICT (organization_id, contact_id) DO UPDATE SET updated_at = now(), status = 'open' RETURNING id", [organizationId, contact.rows[0].id]);
+    const initialColumnId = await leads.initialColumnId(client, organizationId);
+    const conversation = await client.query("INSERT INTO conversations (organization_id, contact_id, lead_column_id) VALUES ($1, $2, $3) ON CONFLICT (organization_id, contact_id) DO UPDATE SET updated_at = now(), status = 'open', lead_column_id = COALESCE(conversations.lead_column_id, EXCLUDED.lead_column_id) RETURNING id", [organizationId, contact.rows[0].id, initialColumnId]);
     const inserted = await client.query("INSERT INTO messages (organization_id, conversation_id, direction, type, body, status, provider_message_id) VALUES ($1, $2, 'inbound', $3, $4, 'received', $5) ON CONFLICT (provider_message_id) DO NOTHING RETURNING id", [organizationId, conversation.rows[0].id, message.type || 'unknown', textFor(message), message.id]);
     return { conversationId: conversation.rows[0].id, inserted: inserted.rowCount > 0 };
   });

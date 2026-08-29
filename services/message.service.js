@@ -116,6 +116,32 @@ const send = async (payload) => {
   return { accepted: true, messages: body.messages || [] };
 };
 
+exports.uploadImage = async ({ buffer, contentType, filename }) => {
+  const { accessToken, phoneNumberId, version } = graphConfig();
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('file', new Blob([buffer], { type: contentType }), filename);
+  let response;
+  try {
+    response = await fetch(`https://graph.facebook.com/${version}/${phoneNumberId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form,
+      signal: AbortSignal.timeout(Number(process.env.WHATSAPP_REQUEST_TIMEOUT_MS || 10000)),
+    });
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'error', message: 'Meta media upload failed', errorType: error.name }));
+    throw new MessageError(502, 'Unable to reach Meta');
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.id) {
+    console.error(JSON.stringify({ level: 'warn', message: 'Meta rejected image upload', status: response.status }));
+    throw new MessageError(response.status >= 500 ? 502 : 400, 'Meta rejected the image', metaError(body));
+  }
+  console.log(JSON.stringify({ level: 'info', message: 'Remarketing image uploaded to Meta' }));
+  return { mediaId: body.id, filename };
+};
+
 exports.MessageError = MessageError;
 exports.isOutboundApiKeyValid = (key) => safeEqual(key, process.env.OUTBOUND_API_KEY);
 

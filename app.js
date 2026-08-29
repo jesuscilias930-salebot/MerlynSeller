@@ -1,16 +1,29 @@
-require('dotenv').config();
-const express = require('express');
-const cookieParser = require('cookie-parser');
-const cors = require('cors');
+require('dotenv').config(); //Injects enviroment variables into process.env
+
+const express = require('express'); //create server and endpoint
+const cookieParser = require('cookie-parser'); //Reads browser cookies
+const cors = require('cors'); //Allows the ui call to service from other domain
+
 const webhookRoutes = require('./routes/webhook.routes');
 const messageRoutes = require('./routes/message.routes');
 const authRoutes = require('./routes/auth.routes');
 const conversationRoutes = require('./routes/conversation.routes');
 const settingsRoutes = require('./routes/settings.routes');
 const realtimeRoutes = require('./routes/realtime.routes');
-const realtime = require('./lib/realtime');
+const leadRoutes = require('./routes/lead.routes');
+const remarketingRoutes = require('./routes/remarketing.routes');
+
+const realtime = require('./lib/realtime'); //Load the module to conect redis with the conexions SSE de la UI
 
 const app = express();
+
+/*
+app.use(...)      // agregar reglas o middleware
+app.get(...)      // crear endpoint GET
+app.post(...)     // crear endpoint POST
+app.listen(...)   // abrir el puerto y empezar a recibir solicitudes
+*/
+
 app.disable('x-powered-by');
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || false, credentials: true }));
 app.use(cookieParser());
@@ -19,7 +32,7 @@ app.use(cookieParser());
 // different domains. Reject browser requests from an unexpected Origin before
 // they can perform a session-based state change. Requests without an Origin
 // remain available for server-to-server integrations and Postman testing.
-const browserSessionPaths = ['/auth', '/conversations', '/settings'];
+const browserSessionPaths = ['/auth', '/conversations', '/settings', '/leads', '/remarketing'];
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 app.use((req, res, next) => {
   const isBrowserSessionRequest = browserSessionPaths.some((path) => req.path === path || req.path.startsWith(`${path}/`));
@@ -81,6 +94,8 @@ app.use('/auth', authRoutes);
 app.use('/conversations', conversationRoutes);
 app.use('/settings', settingsRoutes);
 app.use('/realtime', realtimeRoutes);
+app.use('/leads', leadRoutes);
+app.use('/remarketing', remarketingRoutes);
 realtime.start();
 
 app.use((err, req, res, next) => {

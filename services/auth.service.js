@@ -21,6 +21,15 @@ exports.createSession = async (accessToken) => {
     await client.query('INSERT INTO users (id, email, display_name) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, display_name = EXCLUDED.display_name, updated_at = now()', [user.id, user.email, user.user_metadata?.full_name || user.email]);
     const org = await client.query('INSERT INTO organizations (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id', [`${user.email} workspace`]);
     const organizationId = org.rows[0].id;
+    await client.query(`
+      INSERT INTO lead_columns (organization_id, name, position)
+      VALUES
+        ($1, 'Primer contacto', 0),
+        ($1, 'Re-Marketing', 1),
+        ($1, 'Cotizacion', 2),
+        ($1, 'Pendiente envio', 3)
+      ON CONFLICT (organization_id, name) DO NOTHING
+    `, [organizationId]);
     await client.query('INSERT INTO memberships (organization_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT (organization_id, user_id) DO NOTHING', [organizationId, user.id, 'owner']);
     await client.query('INSERT INTO app_sessions (token_hash, user_id, organization_id, expires_at) VALUES ($1, $2, $3, $4)', [hash(sessionToken), user.id, organizationId, expiresAt]);
     return { organizationId, user: { id: user.id, email: user.email, role: 'owner' } };

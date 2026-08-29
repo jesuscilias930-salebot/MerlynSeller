@@ -13,11 +13,11 @@ exports.isValidToken = (mode, token) => (
   mode === 'subscribe' && safeEqual(token, process.env.VERIFY_TOKEN)
 );
 
-exports.isValidSignature = (rawBody, signatureHeader) => {
+exports.isValidSignature = (rawBody, signatureHeaderMeta) => {
   const appSecret = process.env.META_APP_SECRET;
-  if (!appSecret || !Buffer.isBuffer(rawBody) || typeof signatureHeader !== 'string') return false;
+  if (!appSecret || !Buffer.isBuffer(rawBody) || typeof signatureHeaderMeta !== 'string') return false;
 
-  const match = /^sha256=([a-f0-9]{64})$/i.exec(signatureHeader);
+  const match = /^sha256=([a-f0-9]{64})$/i.exec(signatureHeaderMeta);
   if (!match) return false;
 
   const expectedSignature = crypto

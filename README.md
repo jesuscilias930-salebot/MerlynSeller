@@ -128,6 +128,36 @@ Authenticated UI endpoints:
 | `POST /conversations/:id/messages/text` | Queue `{ "body": "..." }` for delivery |
 | `POST /conversations/:id/messages/document` | Queue a reusable Meta document `{ "mediaId": "...", "filename": "...", "caption": "..." }` |
 | `POST /settings/catalog-document` | Owner/admin configures the reusable catalog Media ID and automatic trigger |
+| `GET /leads/board` | Returns lead columns and their conversation cards |
+| `POST /leads/columns` | Owner/admin adds `{ "name": "..." }` to the pipeline |
+| `DELETE /leads/columns/:id` | Owner/admin removes a column and moves its leads to the first remaining column |
+| `PATCH /leads/:id/column` | Moves a conversation with `{ "columnId": "..." }` |
+| `POST /remarketing/images` | Owner/admin uploads a JPEG, PNG, or WebP image to Meta (raw file body) |
+| `POST /remarketing/campaigns` | Owner/admin queues a text, image, or image-with-caption campaign for one lead column |
+
+### Lead pipeline
+
+Migration `003_lead_pipeline.sql` adds a configurable sales pipeline per
+organization. Existing and new conversations begin in `Primer contacto`; the
+initial columns are `Primer contacto`, `Re-Marketing`, `Cotizacion`, and
+`Pendiente envio`. The UI uses `GET /leads/board` to draw the board and moves a
+lead with drag and drop through `PATCH /leads/:conversationId/column`.
+
+Only owners and admins can add or remove columns. Removing a column never
+deletes its conversations: they move automatically to the first remaining
+column. At least one column must remain.
+
+### Remarketing campaigns
+
+The UI Remarketing panel uploads images privately through the API, which stores
+the resulting Meta Media ID only in the campaign record. A campaign can contain
+text, an image, or both (the text becomes the image caption). It queues one
+outbound message per eligible conversation in the selected column.
+
+Free-form WhatsApp text and images are limited to the rolling 24-hour customer
+service window after the customer's latest inbound message. The API excludes
+contacts outside that window and reports their count. Use an approved WhatsApp
+template to reach those contacts.
 
 ### Reusable catalog document
 

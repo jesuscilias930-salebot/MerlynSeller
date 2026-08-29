@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const db = require('../lib/db');
 const { outboundQueue } = require('../lib/queue');
+const leads = require('./lead.service');
 
 const phone = z.string().trim().transform((value) => value.replace(/^\+/, '')).refine((value) => /^\d{8,15}$/.test(value), 'phoneNumber must be E.164');
 const createSchema = z.object({ phoneNumber: phone, name: z.string().trim().max(120).optional() });
@@ -23,7 +24,8 @@ exports.create = async (organizationId, input) => {
   const data = validation(createSchema, input);
   return db.transaction(async (client) => {
     const contact = await client.query('INSERT INTO contacts (organization_id, phone_number, name) VALUES ($1, $2, $3) ON CONFLICT (organization_id, phone_number) DO UPDATE SET name = COALESCE(EXCLUDED.name, contacts.name), updated_at = now() RETURNING id, phone_number, name', [organizationId, data.phoneNumber, data.name || null]);
-    const conversation = await client.query("INSERT INTO conversations (organization_id, contact_id) VALUES ($1, $2) ON CONFLICT (organization_id, contact_id) DO UPDATE SET updated_at = now() RETURNING id, status, updated_at", [organizationId, contact.rows[0].id]);
+    const initialColumnId = await leads.initialColumnId(client, organizationId);
+    const conversation = await client.query("INSERT INTO conversations (organization_id, contact_id, lead_column_id) VALUES ($1, $2, $3) ON CONFLICT (organization_id, contact_id) DO UPDATE SET updated_at = now(), lead_column_id = COALESCE(conversations.lead_column_id, EXCLUDED.lead_column_id) RETURNING id, status, updated_at", [organizationId, contact.rows[0].id, initialColumnId]);
     return { ...conversation.rows[0], contact: contact.rows[0] };
   });
 };
