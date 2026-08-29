@@ -20,7 +20,7 @@ const validation = (schema, value) => {
 };
 
 exports.list = async (organizationId) => (await db.query(`SELECT c.id, c.status, c.updated_at, ct.phone_number, ct.name, (SELECT body FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message FROM conversations c JOIN contacts ct ON ct.id = c.contact_id WHERE c.organization_id = $1 ORDER BY c.updated_at DESC`, [organizationId])).rows;
-exports.messages = async (organizationId, conversationId) => (await db.query('SELECT id, direction, type, body, media_id, status, error_code, provider_message_id, created_at FROM messages WHERE organization_id = $1 AND conversation_id = $2 ORDER BY created_at ASC', [organizationId, conversationId])).rows;
+exports.messages = async (organizationId, conversationId) => (await db.query('SELECT id, direction, type, body, media_id, filename, status, error_code, provider_message_id, created_at FROM messages WHERE organization_id = $1 AND conversation_id = $2 ORDER BY created_at ASC', [organizationId, conversationId])).rows;
 exports.documentOptions = async (organizationId, conversationId) => {
   const conversation = await db.query('SELECT 1 FROM conversations WHERE id = $1 AND organization_id = $2', [conversationId, organizationId]);
   if (!conversation.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
@@ -112,7 +112,7 @@ exports.queueMedia = async (organizationId, conversationId, type, input) => {
 
 exports.media = async (organizationId, conversationId, messageId) => {
   const result = await db.query(
-    "SELECT type, media_id FROM messages WHERE id = $1 AND conversation_id = $2 AND organization_id = $3 AND type IN ('audio', 'sticker', 'image', 'video')",
+    "SELECT type, media_id FROM messages WHERE id = $1 AND conversation_id = $2 AND organization_id = $3 AND type IN ('audio', 'sticker', 'image', 'video', 'document')",
     [messageId, conversationId, organizationId],
   );
   if (!result.rows[0]?.media_id) {
