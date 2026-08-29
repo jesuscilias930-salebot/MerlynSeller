@@ -22,6 +22,12 @@ exports.messages = async (req, res, next) => {
     }
 };
 
+exports.documentOptions = async (req, res, next) => {
+    try {
+        return res.json(await conversations.documentOptions(req.auth.organizationId, req.params.id));
+    } catch (error) { return handle(error, res, next); }
+};
+
 exports.create = async (req, res, next) => {
      try { 
         return res.status(201).json(await conversations.create(req.auth.organizationId, req.body)); 
@@ -62,6 +68,22 @@ exports.sendAudio = async (req, res, next) => {
         return handle(error, res, next);
     }
 };
+
+const sendMedia = (type) => async (req, res, next) => {
+    try {
+        const contentType = (req.get('content-type') || '').split(';')[0];
+        const filename = decodeURIComponent(req.get('x-upload-filename') || type);
+        if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: `${type} file is required` });
+        return res.status(202).json(await conversations.queueMedia(req.auth.organizationId, req.params.id, type, {
+            buffer: req.body,
+            contentType,
+            filename,
+        }));
+    } catch (error) { return handle(error, res, next); }
+};
+
+exports.sendImage = sendMedia('image');
+exports.sendVideo = sendMedia('video');
 
 exports.media = async (req, res, next) => {
     try {

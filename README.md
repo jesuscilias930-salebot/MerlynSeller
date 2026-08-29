@@ -128,6 +128,9 @@ Authenticated UI endpoints:
 | `POST /conversations/:id/messages/text` | Queue `{ "body": "..." }` for delivery |
 | `POST /conversations/:id/messages/document` | Queue a reusable Meta document `{ "mediaId": "...", "filename": "...", "caption": "..." }` |
 | `POST /conversations/:id/messages/audio` | Upload and queue an AAC, M4A, MP3, AMR, OGG, or OPUS audio file (raw body) |
+| `GET /conversations/:id/document-options` | Lists reusable documents, newest sent attachment first |
+| `POST /conversations/:id/messages/image` | Upload and queue a JPEG, PNG, or WebP image (raw body) |
+| `POST /conversations/:id/messages/video` | Upload and queue an MP4 or 3GPP video (raw body) |
 | `GET /conversations/:id/messages/:messageId/media` | Authenticated proxy for received audio and sticker media |
 | `POST /settings/catalog-document` | Owner/admin configures the reusable catalog Media ID and automatic trigger |
 | `GET /leads/board` | Returns lead columns and their conversation cards |
@@ -206,6 +209,11 @@ The UI can also record audio from the browser microphone, preview or discard it,
 and send it. Browsers that record `audio/webm` are converted by FFmpeg inside the
 Docker image to OGG/Opus before the upload to Meta. Keep the API and worker on
 the updated Docker image for this feature.
+
+The chat attachment toolbar lists reusable documents with the newest sent
+attachment as its default selection. It can send the selected document again,
+or upload images and videos securely through the API. The worker sends each
+upload through the existing outbound queue.
 
 Verified incoming webhooks are also queued. Once an owner connects the deployment's
 phone number through `/settings/whatsapp-account`, the worker creates contacts and
