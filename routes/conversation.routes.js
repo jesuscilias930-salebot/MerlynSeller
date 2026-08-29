@@ -4,7 +4,7 @@ const { requireUser } = require('../middleware/auth.middleware');
 const audioMimeTypes = new Set(['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus', 'audio/webm']);
 const isAudio = (req) => audioMimeTypes.has((req.get('content-type') || '').split(';')[0]);
 const imageMimeTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
-const videoMimeTypes = new Set(['video/mp4', 'video/3gpp', 'video/quicktime']);
+const videoMimeTypes = new Set(['video/mp4', 'video/3gpp']);
 const isPdf = (req) => (req.get('content-type') || '').split(';')[0] === 'application/pdf';
 const isImage = (req) => imageMimeTypes.has((req.get('content-type') || '').split(';')[0]);
 const isVideo = (req) => videoMimeTypes.has((req.get('content-type') || '').split(';')[0]);

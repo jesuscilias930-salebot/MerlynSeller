@@ -1,8 +1,5 @@
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
-const fs = require('node:fs/promises');
-const os = require('node:os');
-const path = require('node:path');
 
 class MessageError extends Error {
   constructor(status, message, meta = undefined) {
@@ -195,62 +192,12 @@ exports.prepareAudio = async ({ buffer, contentType, filename }) => {
   throw new MessageError(400, 'Unsupported audio format');
 };
 
-const runFfmpeg = (argumentsList) => new Promise((resolve, reject) => {
-  const ffmpegProcess = spawn('ffmpeg', argumentsList, { stdio: ['ignore', 'ignore', 'pipe'] });
-  let errorOutput = '';
-  const timeout = setTimeout(() => ffmpegProcess.kill('SIGKILL'), Number(process.env.VIDEO_CONVERSION_TIMEOUT_MS || 120000));
-  ffmpegProcess.stderr.on('data', (chunk) => { errorOutput += chunk.toString(); });
-  ffmpegProcess.on('error', (error) => {
-    clearTimeout(timeout);
-    if (error.code === 'ENOENT') return reject(new MessageError(503, 'Video conversion is not available'));
-    return reject(new MessageError(500, 'Video conversion failed'));
-  });
-  ffmpegProcess.on('close', (code) => {
-    clearTimeout(timeout);
-    if (code !== 0) {
-      console.warn(JSON.stringify({ level: 'warn', message: 'Video conversion failed', exitCode: code, details: errorOutput.slice(-300) }));
-      if (/stream map .*matches no streams|does not contain any stream/i.test(errorOutput)) {
-        return reject(new MessageError(400, 'The selected MOV file does not contain a video stream'));
-      }
-      return reject(new MessageError(400, 'Unable to convert the MOV video to MP4'));
-    }
-    return resolve();
-  });
-});
-
-// WhatsApp Cloud API does not accept QuickTime (.mov) uploads. Generate a
-// conventional, seekable MP4 file instead of a fragmented MP4 stream: Meta can
-// then reliably detect its H.264 video track.
-const convertMovToMp4 = async (buffer) => {
-  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'merlynsales-video-'));
-  const inputPath = path.join(temporaryDirectory, 'input.mov');
-  const outputPath = path.join(temporaryDirectory, 'output.mp4');
-  try {
-    await fs.writeFile(inputPath, buffer);
-    await runFfmpeg([
-      '-y', '-i', inputPath,
-      '-map', '0:v:0', '-map', '0:a:0?',
-      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
-      '-movflags', '+faststart', outputPath,
-    ]);
-    const converted = await fs.readFile(outputPath);
-    if (converted.length === 0) throw new MessageError(400, 'Unable to convert the MOV video to MP4');
-    return converted;
-  } finally {
-    await fs.rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
-  }
-};
-
 exports.prepareVideo = async ({ buffer, contentType, filename }) => {
   const normalizedType = String(contentType || '').toLowerCase();
   if (metaVideoTypes.has(normalizedType)) {
     return { buffer, contentType: normalizedType, filename: requiredString(filename, 'filename', 240) };
   }
-  if (normalizedType === 'video/quicktime') {
-    const converted = await convertMovToMp4(buffer);
-    return { buffer: converted, contentType: 'video/mp4', filename: `${requiredString(filename, 'filename', 240).replace(/\.[^.]+$/, '') || 'video'}.mp4` };
-  }
-  throw new MessageError(400, 'Unsupported video format');
+  throw new MessageError(400, 'Unsupported video format. Upload an MP4 or 3GPP video');
 };
 
 exports.downloadMedia = async (mediaId) => {
