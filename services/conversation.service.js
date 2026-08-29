@@ -20,8 +20,10 @@ const validation = (schema, value) => {
 };
 
 exports.list = async (organizationId, userId) => (await db.query(`
-  SELECT c.id, c.status, c.updated_at, ct.phone_number, ct.name,
-    (SELECT body FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+  SELECT c.id, c.status, c.updated_at, c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
+    latest.body AS last_message,
+    latest.direction AS "lastDirection",
+    (c.status = 'open' AND latest.direction = 'inbound') AS "needsResponse",
     (SELECT COUNT(*)::int FROM messages m
       WHERE m.conversation_id = c.id
         AND m.direction = 'inbound'
@@ -29,6 +31,9 @@ exports.list = async (organizationId, userId) => (await db.query(`
     ) AS "unreadCount"
   FROM conversations c
   JOIN contacts ct ON ct.id = c.contact_id
+  LEFT JOIN LATERAL (
+    SELECT body, direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
+  ) latest ON true
   WHERE c.organization_id = $1
   ORDER BY c.updated_at DESC
 `, [organizationId, userId])).rows;

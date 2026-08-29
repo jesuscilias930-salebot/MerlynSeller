@@ -42,6 +42,8 @@ exports.board = async (organizationId, userId) => {
       ct.phone_number,
       ct.name,
       latest.body AS last_message,
+      latest.direction AS "lastDirection",
+      (c.status = 'open' AND latest.direction = 'inbound') AS "needsResponse",
       (SELECT COUNT(*)::int FROM messages m
         WHERE m.conversation_id = c.id
           AND m.direction = 'inbound'
@@ -50,7 +52,7 @@ exports.board = async (organizationId, userId) => {
     FROM conversations c
     JOIN contacts ct ON ct.id = c.contact_id
     LEFT JOIN LATERAL (
-      SELECT body
+      SELECT body, direction
       FROM messages
       WHERE conversation_id = c.id
       ORDER BY created_at DESC
