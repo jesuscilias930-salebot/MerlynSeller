@@ -46,6 +46,9 @@ exports.cookieOptions = (expiresAt) => ({
   // The deployed UI and API use different Render subdomains. Modern browsers
   // require SameSite=None (with Secure) to include this cookie on UI API calls.
   sameSite: requiresCrossSiteCookie() ? 'none' : 'lax',
+  // Chrome can block third-party cookies between separate Render subdomains.
+  // Partitioned cookies remain scoped to this UI/API pairing.
+  partitioned: requiresCrossSiteCookie(),
   expires: expiresAt,
   path: '/',
 });
