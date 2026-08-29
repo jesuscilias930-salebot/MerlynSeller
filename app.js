@@ -108,6 +108,7 @@ app.use((err, req, res, next) => {
     method: req.method,
     path: req.path,
     errorType: err.name,
+    errorMessage: err.message,
   }));
   return res.status(500).json({ error: 'Internal server error' });
 });
