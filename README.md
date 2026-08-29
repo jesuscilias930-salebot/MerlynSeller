@@ -136,6 +136,9 @@ Authenticated UI endpoints:
 | `PATCH /leads/:id/column` | Moves a conversation with `{ "columnId": "..." }` |
 | `POST /remarketing/images` | Owner/admin uploads a JPEG, PNG, or WebP image to Meta (raw file body) |
 | `POST /remarketing/campaigns` | Owner/admin queues a text, image, or image-with-caption campaign for one lead column |
+| `GET /remarketing/presets` | Owner/admin lists saved remarketing messages |
+| `POST /remarketing/presets` | Owner/admin saves or updates `{ "name", "body", "mediaId", "filename" }` |
+| `DELETE /remarketing/presets/:id` | Owner/admin deletes a saved remarketing message |
 
 ### Lead pipeline
 
@@ -155,6 +158,11 @@ The UI Remarketing panel uploads images privately through the API, which stores
 the resulting Meta Media ID only in the campaign record. A campaign can contain
 text, an image, or both (the text becomes the image caption). It queues one
 outbound message per eligible conversation in the selected column.
+
+Saved remarketing messages retain the text and Meta Media ID together in
+`remarketing_presets`, per organization. Reusing a message therefore restores
+both its caption and image without uploading it again. If Meta later expires or
+removes that Media ID, upload a replacement image and save the preset again.
 
 Free-form WhatsApp text and images are limited to the rolling 24-hour customer
 service window after the customer's latest inbound message. The API excludes

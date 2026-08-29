@@ -34,3 +34,28 @@ exports.send = async (req, res, next) => {
     return handle(error, res, next);
   }
 };
+
+exports.listPresets = async (req, res, next) => {
+  try {
+    return res.json(await remarketing.listPresets(req.auth.organizationId));
+  } catch (error) {
+    return handle(error, res, next);
+  }
+};
+
+exports.savePreset = async (req, res, next) => {
+  try {
+    return res.status(201).json(await remarketing.savePreset(req.auth.organizationId, req.body));
+  } catch (error) {
+    return handle(error, res, next);
+  }
+};
+
+exports.removePreset = async (req, res, next) => {
+  try {
+    await remarketing.removePreset(req.auth.organizationId, req.params.id);
+    return res.status(204).end();
+  } catch (error) {
+    return handle(error, res, next);
+  }
+};

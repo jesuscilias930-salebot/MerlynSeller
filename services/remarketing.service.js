@@ -14,12 +14,64 @@ const campaignSchema = z.object({
   if (value.filename && !value.mediaId) context.addIssue({ code: 'custom', message: 'filename requires mediaId' });
 });
 
+const presetSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  body: z.string().trim().min(1).max(4096).optional(),
+  mediaId: z.string().trim().min(1).max(256).optional(),
+  filename: z.string().trim().min(1).max(240).optional(),
+}).superRefine((value, context) => {
+  if (!value.body && !value.mediaId) context.addIssue({ code: 'custom', message: 'Provide a message, an image, or both' });
+  if (value.mediaId && value.body && value.body.length > 1024) context.addIssue({ code: 'custom', message: 'An image caption cannot exceed 1024 characters' });
+  if (value.filename && !value.mediaId) context.addIssue({ code: 'custom', message: 'filename requires mediaId' });
+});
+
 const validate = (value) => {
   const parsed = campaignSchema.safeParse(value);
   if (parsed.success) return parsed.data;
   const error = new Error(parsed.error.issues[0].message);
   error.status = 400;
   throw error;
+};
+
+const validatePreset = (value) => {
+  const parsed = presetSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  const error = new Error(parsed.error.issues[0].message);
+  error.status = 400;
+  throw error;
+};
+
+exports.listPresets = async (organizationId) => (await db.query(
+  'SELECT id, name, body, image_media_id AS "mediaId", image_filename AS filename, updated_at FROM remarketing_presets WHERE organization_id = $1 ORDER BY updated_at DESC',
+  [organizationId],
+)).rows;
+
+exports.savePreset = async (organizationId, input) => {
+  const data = validatePreset(input);
+  try {
+    const result = await db.query(`
+      INSERT INTO remarketing_presets (organization_id, name, body, image_media_id, image_filename)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (organization_id, name) DO UPDATE SET
+        body = EXCLUDED.body,
+        image_media_id = EXCLUDED.image_media_id,
+        image_filename = EXCLUDED.image_filename,
+        updated_at = now()
+      RETURNING id, name, body, image_media_id AS "mediaId", image_filename AS filename, updated_at
+    `, [organizationId, data.name, data.body || null, data.mediaId || null, data.filename || null]);
+    return result.rows[0];
+  } catch (error) {
+    throw error;
+  }
+};
+
+exports.removePreset = async (organizationId, presetId) => {
+  const result = await db.query('DELETE FROM remarketing_presets WHERE id = $1 AND organization_id = $2 RETURNING id', [presetId, organizationId]);
+  if (!result.rows[0]) {
+    const error = new Error('Remarketing preset not found');
+    error.status = 404;
+    throw error;
+  }
 };
 
 exports.queueCampaign = async (organizationId, input) => {
