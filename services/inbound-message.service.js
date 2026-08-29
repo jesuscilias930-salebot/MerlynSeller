@@ -5,6 +5,16 @@ const leads = require('./lead.service');
 
 const textFor = (message) => message.text?.body || message.caption || `[${message.type || 'message'}]`;
 const mediaIdFor = (message) => message?.[message.type]?.id || null;
+const statusFailure = (status) => {
+  const error = status?.errors?.[0];
+  if (!error) return null;
+  const code = error.code ? String(error.code) : 'unknown';
+  const detail = [error.title, error.error_data?.details || error.message]
+    .filter(Boolean)
+    .join(': ')
+    .slice(0, 900);
+  return { code, detail, stored: `[${code}]${detail ? ` ${detail}` : ''}` };
+};
 
 const saveMessage = async (organizationId, message, contactName) => {
   if (!message.id || !message.from) return;
@@ -60,10 +70,20 @@ const queueCatalogIfRequested = async (organizationId, conversationId, message) 
 
 const updateStatus = async (status) => {
   if (!status.id || !['sent', 'delivered', 'read', 'failed'].includes(status.status)) return;
-  const result = await db.query('UPDATE messages SET status = $2, updated_at = now() WHERE provider_message_id = $1 RETURNING organization_id, conversation_id', [status.id, status.status]);
+  const failure = status.status === 'failed' ? statusFailure(status) : null;
+  const result = await db.query(
+    "UPDATE messages SET status = $2, error_code = CASE WHEN $2 = 'failed' THEN $3 ELSE error_code END, updated_at = now() WHERE provider_message_id = $1 RETURNING organization_id, conversation_id",
+    [status.id, status.status, failure?.stored || 'Meta did not provide an error detail'],
+  );
   if (result.rows[0]) {
     await realtime.publish(result.rows[0].organization_id, 'message.status_updated', result.rows[0].conversation_id);
-    console.log(JSON.stringify({ level: 'info', message: 'WhatsApp message status updated', status: status.status, conversationId: result.rows[0].conversation_id }));
+    console.log(JSON.stringify({
+      level: status.status === 'failed' ? 'warn' : 'info',
+      message: status.status === 'failed' ? 'WhatsApp message delivery failed' : 'WhatsApp message status updated',
+      status: status.status,
+      conversationId: result.rows[0].conversation_id,
+      ...(failure ? { metaErrorCode: failure.code, metaErrorDetail: failure.detail || undefined } : {}),
+    }));
   }
 };
 
