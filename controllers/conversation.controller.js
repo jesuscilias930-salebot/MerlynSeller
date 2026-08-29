@@ -85,6 +85,19 @@ const sendMedia = (type) => async (req, res, next) => {
 exports.sendImage = sendMedia('image');
 exports.sendVideo = sendMedia('video');
 
+exports.uploadDocument = async (req, res, next) => {
+    try {
+        const contentType = (req.get('content-type') || '').split(';')[0];
+        const filename = decodeURIComponent(req.get('x-upload-filename') || 'document.pdf');
+        if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'PDF file is required' });
+        return res.status(202).json(await conversations.queueUploadedDocument(req.auth.organizationId, req.params.id, {
+            buffer: req.body,
+            contentType,
+            filename,
+        }));
+    } catch (error) { return handle(error, res, next); }
+};
+
 exports.media = async (req, res, next) => {
     try {
         const media = await conversations.media(req.auth.organizationId, req.params.id, req.params.messageId);

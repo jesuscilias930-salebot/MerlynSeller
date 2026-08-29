@@ -66,6 +66,7 @@ const optionalText = (value, field, maximumLength) => (
 );
 
 const metaAudioTypes = new Set(['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus']);
+const metaVideoTypes = new Set(['video/mp4', 'video/3gpp']);
 
 const convertWebmToOgg = (buffer) => new Promise((resolve, reject) => {
   const process = spawn('ffmpeg', ['-i', 'pipe:0', '-vn', '-c:a', 'libopus', '-f', 'ogg', 'pipe:1'], {
@@ -182,6 +183,46 @@ exports.prepareAudio = async ({ buffer, contentType, filename }) => {
     return { buffer: converted, contentType: 'audio/ogg', filename: 'recording.ogg' };
   }
   throw new MessageError(400, 'Unsupported audio format');
+};
+
+// WhatsApp Cloud API does not accept QuickTime (.mov) uploads. iPhones commonly
+// create that format, so normalize it to an H.264/AAC MP4 before uploading it.
+const convertMovToMp4 = (buffer) => new Promise((resolve, reject) => {
+  const process = spawn('ffmpeg', [
+    '-i', 'pipe:0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
+    '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1',
+  ], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const output = [];
+  let errorOutput = '';
+  const timeout = setTimeout(() => process.kill('SIGKILL'), Number(process.env.VIDEO_CONVERSION_TIMEOUT_MS || 120000));
+  process.stdout.on('data', (chunk) => output.push(chunk));
+  process.stderr.on('data', (chunk) => { errorOutput += chunk.toString(); });
+  process.on('error', (error) => {
+    clearTimeout(timeout);
+    if (error.code === 'ENOENT') return reject(new MessageError(503, 'Video conversion is not available'));
+    return reject(new MessageError(500, 'Video conversion failed'));
+  });
+  process.on('close', (code) => {
+    clearTimeout(timeout);
+    if (code !== 0) {
+      console.warn(JSON.stringify({ level: 'warn', message: 'Video conversion failed', exitCode: code, details: errorOutput.slice(-300) }));
+      return reject(new MessageError(400, 'Unable to convert the MOV video to MP4'));
+    }
+    return resolve(Buffer.concat(output));
+  });
+  process.stdin.end(buffer);
+});
+
+exports.prepareVideo = async ({ buffer, contentType, filename }) => {
+  const normalizedType = String(contentType || '').toLowerCase();
+  if (metaVideoTypes.has(normalizedType)) {
+    return { buffer, contentType: normalizedType, filename: requiredString(filename, 'filename', 240) };
+  }
+  if (normalizedType === 'video/quicktime') {
+    const converted = await convertMovToMp4(buffer);
+    return { buffer: converted, contentType: 'video/mp4', filename: `${requiredString(filename, 'filename', 240).replace(/\.[^.]+$/, '') || 'video'}.mp4` };
+  }
+  throw new MessageError(400, 'Unsupported video format');
 };
 
 exports.downloadMedia = async (mediaId) => {

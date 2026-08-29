@@ -71,6 +71,17 @@ exports.queueDocument = async (organizationId, conversationId, input) => {
   return { id: result.rows[0].id, status: 'pending', type: 'document' };
 };
 
+exports.queueUploadedDocument = async (organizationId, conversationId, input) => {
+  const uploaded = await messageService.uploadMedia(input);
+  const result = await db.query(
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, media_id, filename, status) SELECT $1, id, 'outbound', 'document', $3, $4, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
+    [organizationId, conversationId, uploaded.mediaId, uploaded.filename],
+  );
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  await outboundQueue().add('send-document', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
+  return { id: result.rows[0].id, status: 'pending', type: 'document', mediaId: uploaded.mediaId };
+};
+
 exports.queueAudio = async (organizationId, conversationId, input) => {
   const audio = await messageService.prepareAudio(input);
   const uploaded = await messageService.uploadMedia(audio);
@@ -88,7 +99,8 @@ exports.queueAudio = async (organizationId, conversationId, input) => {
 };
 
 exports.queueMedia = async (organizationId, conversationId, type, input) => {
-  const uploaded = await messageService.uploadMedia(input);
+  const media = type === 'video' ? await messageService.prepareVideo(input) : input;
+  const uploaded = await messageService.uploadMedia(media);
   const result = await db.query(
     "INSERT INTO messages (organization_id, conversation_id, direction, type, media_id, status) SELECT $1, id, 'outbound', $3, $4, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
     [organizationId, conversationId, type, uploaded.mediaId],

@@ -127,10 +127,11 @@ Authenticated UI endpoints:
 | `GET /conversations/:id/messages` | List messages |
 | `POST /conversations/:id/messages/text` | Queue `{ "body": "..." }` for delivery |
 | `POST /conversations/:id/messages/document` | Queue a reusable Meta document `{ "mediaId": "...", "filename": "...", "caption": "..." }` |
+| `POST /conversations/:id/messages/document/upload` | Upload, send, and save a new PDF as reusable document (raw body; maximum 25 MB) |
 | `POST /conversations/:id/messages/audio` | Upload and queue an AAC, M4A, MP3, AMR, OGG, or OPUS audio file (raw body) |
 | `GET /conversations/:id/document-options` | Lists reusable documents, newest sent attachment first |
 | `POST /conversations/:id/messages/image` | Upload and queue a JPEG, PNG, or WebP image (raw body) |
-| `POST /conversations/:id/messages/video` | Upload and queue an MP4 or 3GPP video (raw body) |
+| `POST /conversations/:id/messages/video` | Upload and queue an MP4, 3GPP, or MOV video (MOV is converted to MP4) |
 | `GET /conversations/:id/messages/:messageId/media` | Authenticated proxy for received audio and sticker media |
 | `POST /settings/catalog-document` | Owner/admin configures the reusable catalog Media ID and automatic trigger |
 | `GET /leads/board` | Returns lead columns and their conversation cards |
