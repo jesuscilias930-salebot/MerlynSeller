@@ -37,6 +37,7 @@ exports.board = async (organizationId, userId) => {
     SELECT
       c.id,
       c.lead_column_id,
+      c.auto_reply_enabled AS "autoReplyEnabled",
       c.status,
       c.updated_at,
       ct.phone_number,

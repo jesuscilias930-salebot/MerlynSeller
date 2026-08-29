@@ -2,6 +2,7 @@ const db = require('../lib/db');
 const realtime = require('../lib/realtime');
 const conversations = require('./conversation.service');
 const leads = require('./lead.service');
+const automations = require('./automation.service');
 
 const textFor = (message) => message.text?.body || message.caption || `[${message.type || 'message'}]`;
 const mediaIdFor = (message) => message?.[message.type]?.id || null;
@@ -46,29 +47,6 @@ const saveMessage = async (organizationId, message, contactName) => {
   return result;
 };
 
-const normalize = (value) => String(value || '')
-  .normalize('NFD')
-  .replace(/[\u0300-\u036f]/g, '')
-  .toLowerCase()
-  .replace(/[^\p{L}\p{N}\s]/gu, '')
-  .replace(/\s+/g, ' ')
-  .trim();
-
-const queueCatalogIfRequested = async (organizationId, conversationId, message) => {
-  if (message.type !== 'text') return;
-  const catalog = await db.query('SELECT media_id, filename, caption, trigger_phrase FROM catalog_documents WHERE organization_id = $1', [organizationId]);
-  const document = catalog.rows[0];
-  const triggerPhrase = normalize(document?.trigger_phrase);
-  if (!document || !triggerPhrase || !normalize(message.text?.body).includes(triggerPhrase)) return;
-
-  const queued = await conversations.queueDocument(organizationId, conversationId, {
-    mediaId: document.media_id,
-    filename: document.filename || undefined,
-    caption: document.caption || undefined,
-  });
-  console.log(JSON.stringify({ level: 'info', message: 'Catalog document queued automatically', conversationId, messageId: queued.id }));
-};
-
 const updateStatus = async (status) => {
   if (!status.id || !['sent', 'delivered', 'read', 'failed'].includes(status.status)) return;
   const failure = status.status === 'failed' ? statusFailure(status) : null;
@@ -108,7 +86,7 @@ exports.process = async (payload) => {
           message,
           contactNames.get(message.from),
         );
-        if (stored?.inserted) await queueCatalogIfRequested(account.rows[0].organization_id, stored.conversationId, message);
+        if (stored?.inserted) await automations.processIncoming(account.rows[0].organization_id, stored.conversationId, message);
       }
       for (const status of value.statuses || []) await updateStatus(status);
     }

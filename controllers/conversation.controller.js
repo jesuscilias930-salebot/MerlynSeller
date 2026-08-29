@@ -34,6 +34,10 @@ exports.markRead = async (req, res, next) => {
     } catch (error) { return handle(error, res, next); }
 };
 
+exports.setAutoReply = async (req, res, next) => {
+    try { return res.json(await conversations.setAutoReply(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); }
+};
+
 exports.create = async (req, res, next) => {
      try { 
         return res.status(201).json(await conversations.create(req.auth.organizationId, req.body)); 

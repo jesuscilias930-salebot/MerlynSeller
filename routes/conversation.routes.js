@@ -13,6 +13,7 @@ router.get('/', controller.list);
 router.post('/', controller.create);
 router.get('/:id/messages', controller.messages);
 router.post('/:id/read', controller.markRead);
+router.patch('/:id/automation', controller.setAutoReply);
 router.get('/:id/document-options', controller.documentOptions);
 router.get('/:id/messages/:messageId/media', controller.media);
 router.post('/:id/messages/text', controller.sendText);

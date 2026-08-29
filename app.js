@@ -12,6 +12,7 @@ const settingsRoutes = require('./routes/settings.routes');
 const realtimeRoutes = require('./routes/realtime.routes');
 const leadRoutes = require('./routes/lead.routes');
 const remarketingRoutes = require('./routes/remarketing.routes');
+const automationRoutes = require('./routes/automation.routes');
 
 const realtime = require('./lib/realtime'); //Load the module to conect redis with the conexions SSE de la UI
 
@@ -96,6 +97,7 @@ app.use('/settings', settingsRoutes);
 app.use('/realtime', realtimeRoutes);
 app.use('/leads', leadRoutes);
 app.use('/remarketing', remarketingRoutes);
+app.use('/automations', automationRoutes);
 realtime.start();
 
 app.use((err, req, res, next) => {

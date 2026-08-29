@@ -7,6 +7,7 @@ const messageService = require('./message.service');
 const phone = z.string().trim().transform((value) => value.replace(/^\+/, '')).refine((value) => /^\d{8,15}$/.test(value), 'phoneNumber must be E.164');
 const createSchema = z.object({ phoneNumber: phone, name: z.string().trim().max(120).optional() });
 const textSchema = z.object({ body: z.string().trim().min(1).max(4096) });
+const autoReplySchema = z.object({ enabled: z.boolean() });
 const documentSchema = z.object({
   mediaId: z.string().trim().min(1).max(256),
   filename: z.string().trim().min(1).max(240).optional(),
@@ -20,7 +21,7 @@ const validation = (schema, value) => {
 };
 
 exports.list = async (organizationId, userId) => (await db.query(`
-  SELECT c.id, c.status, c.updated_at, c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
+  SELECT c.id, c.status, c.updated_at, c.auto_reply_enabled AS "autoReplyEnabled", c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
     latest.body AS last_message,
     latest.direction AS "lastDirection",
     (c.status = 'open' AND latest.direction = 'inbound') AS "needsResponse",
@@ -69,6 +70,12 @@ exports.markRead = async (organizationId, userId, conversationId) => {
   `, [conversationId, organizationId, userId]);
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   return { marked: true };
+};
+exports.setAutoReply = async (organizationId, conversationId, input) => {
+  const data = validation(autoReplySchema, input);
+  const result = await db.query('UPDATE conversations SET auto_reply_enabled=$3, updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING auto_reply_enabled AS "autoReplyEnabled"', [conversationId, organizationId, data.enabled]);
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  return result.rows[0];
 };
 exports.create = async (organizationId, input) => {
   const data = validation(createSchema, input);

@@ -126,6 +126,11 @@ Authenticated UI endpoints:
 | `GET /conversations` | List conversations |
 | `GET /conversations/:id/messages` | List messages |
 | `POST /conversations/:id/read` | Marks inbound messages as read for the current user |
+| `PATCH /conversations/:id/automation` | Enables/disables automatic replies for one conversation `{ "enabled": true }` |
+| `GET /automations` | Lists configured automated intents |
+| `POST /automations` | Owner/admin creates an automated intent and approved response |
+| `PATCH /automations/:id` | Owner/admin updates an automated intent |
+| `DELETE /automations/:id` | Owner/admin removes an automated intent |
 | `POST /conversations/:id/messages/text` | Queue `{ "body": "..." }` for delivery |
 | `POST /conversations/:id/messages/document` | Queue a reusable Meta document `{ "mediaId": "...", "filename": "...", "caption": "..." }` |
 | `POST /conversations/:id/messages/document/upload` | Upload, send, and save a new PDF as reusable document (raw body; maximum 25 MB) |
