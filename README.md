@@ -127,6 +127,8 @@ Authenticated UI endpoints:
 | `GET /conversations/:id/messages` | List messages |
 | `POST /conversations/:id/messages/text` | Queue `{ "body": "..." }` for delivery |
 | `POST /conversations/:id/messages/document` | Queue a reusable Meta document `{ "mediaId": "...", "filename": "...", "caption": "..." }` |
+| `POST /conversations/:id/messages/audio` | Upload and queue an AAC, M4A, MP3, AMR, OGG, or OPUS audio file (raw body) |
+| `GET /conversations/:id/messages/:messageId/media` | Authenticated proxy for received audio and sticker media |
 | `POST /settings/catalog-document` | Owner/admin configures the reusable catalog Media ID and automatic trigger |
 | `GET /leads/board` | Returns lead columns and their conversation cards |
 | `POST /leads/columns` | Owner/admin adds `{ "name": "..." }` to the pipeline |
@@ -183,6 +185,14 @@ deleted; configure a replacement ID if Meta rejects a later send.
 The worker reads queued outbound messages, calls Meta, and changes their state to
 `sent` or `failed`. This is the path the UI should use; the `/messages/*` endpoints
 remain protected for trusted server-to-server integrations.
+
+### Audio and stickers
+
+Incoming audio and sticker webhooks retain their Meta Media ID in the message
+record. The authenticated media endpoint requests the temporary media URL from
+Meta and streams it to the UI, so Meta access tokens are never exposed to the
+browser. The chat composer uploads supported audio files to Meta, creates a
+pending `audio` message, and the worker sends it through the outbound queue.
 
 Verified incoming webhooks are also queued. Once an owner connects the deployment's
 phone number through `/settings/whatsapp-account`, the worker creates contacts and

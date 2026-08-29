@@ -116,7 +116,7 @@ const send = async (payload) => {
   return { accepted: true, messages: body.messages || [] };
 };
 
-exports.uploadImage = async ({ buffer, contentType, filename }) => {
+exports.uploadMedia = async ({ buffer, contentType, filename }) => {
   const { accessToken, phoneNumberId, version } = graphConfig();
   const form = new FormData();
   form.append('messaging_product', 'whatsapp');
@@ -138,8 +138,43 @@ exports.uploadImage = async ({ buffer, contentType, filename }) => {
     console.error(JSON.stringify({ level: 'warn', message: 'Meta rejected image upload', status: response.status }));
     throw new MessageError(response.status >= 500 ? 502 : 400, 'Meta rejected the image', metaError(body));
   }
-  console.log(JSON.stringify({ level: 'info', message: 'Remarketing image uploaded to Meta' }));
+  console.log(JSON.stringify({ level: 'info', message: 'Media uploaded to Meta' }));
   return { mediaId: body.id, filename };
+};
+
+exports.uploadImage = (input) => exports.uploadMedia(input);
+
+exports.downloadMedia = async (mediaId) => {
+  const { accessToken, version } = graphConfig();
+  const safeMediaId = requiredString(mediaId, 'mediaId', 256);
+  let metadata;
+  try {
+    metadata = await fetch(`https://graph.facebook.com/${version}/${safeMediaId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(Number(process.env.WHATSAPP_REQUEST_TIMEOUT_MS || 10000)),
+    });
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'error', message: 'Meta media lookup failed', errorType: error.name }));
+    throw new MessageError(502, 'Unable to reach Meta');
+  }
+  const details = await metadata.json().catch(() => ({}));
+  if (!metadata.ok || !details.url) throw new MessageError(metadata.status >= 500 ? 502 : 404, 'Media is not available', metaError(details));
+
+  let file;
+  try {
+    file = await fetch(details.url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(Number(process.env.WHATSAPP_REQUEST_TIMEOUT_MS || 10000)),
+    });
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'error', message: 'Meta media download failed', errorType: error.name }));
+    throw new MessageError(502, 'Unable to reach Meta');
+  }
+  if (!file.ok) throw new MessageError(file.status >= 500 ? 502 : 404, 'Media is not available');
+  return {
+    contentType: file.headers.get('content-type') || details.mime_type || 'application/octet-stream',
+    buffer: Buffer.from(await file.arrayBuffer()),
+  };
 };
 
 exports.MessageError = MessageError;

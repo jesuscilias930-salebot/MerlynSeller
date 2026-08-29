@@ -1,10 +1,14 @@
 const router = require('express').Router();
 const controller = require('../controllers/conversation.controller');
 const { requireUser } = require('../middleware/auth.middleware');
+const audioMimeTypes = new Set(['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus']);
+const isAudio = (req) => audioMimeTypes.has((req.get('content-type') || '').split(';')[0]);
 router.use(requireUser);
 router.get('/', controller.list);
 router.post('/', controller.create);
 router.get('/:id/messages', controller.messages);
+router.get('/:id/messages/:messageId/media', controller.media);
 router.post('/:id/messages/text', controller.sendText);
 router.post('/:id/messages/document', controller.sendDocument);
+router.post('/:id/messages/audio', require('express').raw({ type: isAudio, limit: '16mb' }), controller.sendAudio);
 module.exports = router;

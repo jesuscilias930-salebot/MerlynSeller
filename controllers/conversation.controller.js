@@ -45,3 +45,30 @@ exports.sendDocument = async (req, res, next) => {
         return handle(error, res, next);
     }
 };
+
+exports.sendAudio = async (req, res, next) => {
+    try {
+        const contentType = (req.get('content-type') || '').split(';')[0];
+        const filename = decodeURIComponent(req.get('x-upload-filename') || 'audio');
+        if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+            return res.status(400).json({ error: 'Audio file is required' });
+        }
+        return res.status(202).json(await conversations.queueAudio(req.auth.organizationId, req.params.id, {
+            buffer: req.body,
+            contentType,
+            filename,
+        }));
+    } catch (error) {
+        return handle(error, res, next);
+    }
+};
+
+exports.media = async (req, res, next) => {
+    try {
+        const media = await conversations.media(req.auth.organizationId, req.params.id, req.params.messageId);
+        res.set({ 'Content-Type': media.contentType, 'Cache-Control': 'private, max-age=300' });
+        return res.send(media.buffer);
+    } catch (error) {
+        return handle(error, res, next);
+    }
+};

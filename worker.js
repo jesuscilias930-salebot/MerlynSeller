@@ -17,6 +17,8 @@ const outbound = new Worker('outbound-messages', async (job) => {
       ? await messageService.sendAttachment({ to: message.phone_number, type: 'document', id: message.media_id, filename: message.filename || undefined, caption: message.body || undefined })
       : message.type === 'image'
         ? await messageService.sendAttachment({ to: message.phone_number, type: 'image', id: message.media_id, caption: message.body || undefined })
+        : message.type === 'audio'
+          ? await messageService.sendAttachment({ to: message.phone_number, type: 'audio', id: message.media_id })
         : await messageService.sendText({ to: message.phone_number, body: message.body });
 
     await db.query("UPDATE messages SET status = 'sent', provider_message_id = $2, updated_at = now() WHERE id = $1", [message.id, sent.messages[0]?.id || null]);

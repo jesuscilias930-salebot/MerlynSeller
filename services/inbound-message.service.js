@@ -4,6 +4,7 @@ const conversations = require('./conversation.service');
 const leads = require('./lead.service');
 
 const textFor = (message) => message.text?.body || message.caption || `[${message.type || 'message'}]`;
+const mediaIdFor = (message) => message?.[message.type]?.id || null;
 
 const saveMessage = async (organizationId, message, contactName) => {
   if (!message.id || !message.from) return;
@@ -19,7 +20,7 @@ const saveMessage = async (organizationId, message, contactName) => {
     );
     const initialColumnId = await leads.initialColumnId(client, organizationId);
     const conversation = await client.query("INSERT INTO conversations (organization_id, contact_id, lead_column_id) VALUES ($1, $2, $3) ON CONFLICT (organization_id, contact_id) DO UPDATE SET updated_at = now(), status = 'open', lead_column_id = COALESCE(conversations.lead_column_id, EXCLUDED.lead_column_id) RETURNING id", [organizationId, contact.rows[0].id, initialColumnId]);
-    const inserted = await client.query("INSERT INTO messages (organization_id, conversation_id, direction, type, body, status, provider_message_id) VALUES ($1, $2, 'inbound', $3, $4, 'received', $5) ON CONFLICT (provider_message_id) DO NOTHING RETURNING id", [organizationId, conversation.rows[0].id, message.type || 'unknown', textFor(message), message.id]);
+    const inserted = await client.query("INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status, provider_message_id) VALUES ($1, $2, 'inbound', $3, $4, $5, 'received', $6) ON CONFLICT (provider_message_id) DO NOTHING RETURNING id", [organizationId, conversation.rows[0].id, message.type || 'unknown', textFor(message), mediaIdFor(message), message.id]);
     return { conversationId: conversation.rows[0].id, inserted: inserted.rowCount > 0 };
   });
   if (result.inserted) {
