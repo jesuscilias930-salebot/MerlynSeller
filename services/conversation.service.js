@@ -50,7 +50,8 @@ exports.queueDocument = async (organizationId, conversationId, input) => {
 };
 
 exports.queueAudio = async (organizationId, conversationId, input) => {
-  const uploaded = await messageService.uploadMedia(input);
+  const audio = await messageService.prepareAudio(input);
+  const uploaded = await messageService.uploadMedia(audio);
   const result = await db.query(
     "INSERT INTO messages (organization_id, conversation_id, direction, type, media_id, status) SELECT $1, id, 'outbound', 'audio', $3, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
     [organizationId, conversationId, uploaded.mediaId],

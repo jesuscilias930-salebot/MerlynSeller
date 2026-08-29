@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
 
 class MessageError extends Error {
   constructor(status, message, meta = undefined) {
@@ -63,6 +64,33 @@ const mediaReference = (input) => {
 const optionalText = (value, field, maximumLength) => (
   value === undefined ? undefined : requiredString(value, field, maximumLength)
 );
+
+const metaAudioTypes = new Set(['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus']);
+
+const convertWebmToOgg = (buffer) => new Promise((resolve, reject) => {
+  const process = spawn('ffmpeg', ['-i', 'pipe:0', '-vn', '-c:a', 'libopus', '-f', 'ogg', 'pipe:1'], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const output = [];
+  let errorOutput = '';
+  const timeout = setTimeout(() => process.kill('SIGKILL'), Number(process.env.AUDIO_CONVERSION_TIMEOUT_MS || 30000));
+  process.stdout.on('data', (chunk) => output.push(chunk));
+  process.stderr.on('data', (chunk) => { errorOutput += chunk.toString(); });
+  process.on('error', (error) => {
+    clearTimeout(timeout);
+    if (error.code === 'ENOENT') return reject(new MessageError(503, 'Audio conversion is not available'));
+    return reject(new MessageError(500, 'Audio conversion failed'));
+  });
+  process.on('close', (code) => {
+    clearTimeout(timeout);
+    if (code !== 0) {
+      console.warn(JSON.stringify({ level: 'warn', message: 'Audio conversion failed', exitCode: code, details: errorOutput.slice(-300) }));
+      return reject(new MessageError(400, 'Unable to convert the recorded audio'));
+    }
+    return resolve(Buffer.concat(output));
+  });
+  process.stdin.end(buffer);
+});
 
 const graphConfig = () => {
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
@@ -143,6 +171,18 @@ exports.uploadMedia = async ({ buffer, contentType, filename }) => {
 };
 
 exports.uploadImage = (input) => exports.uploadMedia(input);
+
+exports.prepareAudio = async ({ buffer, contentType, filename }) => {
+  const normalizedType = String(contentType || '').toLowerCase();
+  if (metaAudioTypes.has(normalizedType)) {
+    return { buffer, contentType: normalizedType, filename: requiredString(filename, 'filename', 240) };
+  }
+  if (normalizedType === 'audio/webm') {
+    const converted = await convertWebmToOgg(buffer);
+    return { buffer: converted, contentType: 'audio/ogg', filename: 'recording.ogg' };
+  }
+  throw new MessageError(400, 'Unsupported audio format');
+};
 
 exports.downloadMedia = async (mediaId) => {
   const { accessToken, version } = graphConfig();

@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const controller = require('../controllers/conversation.controller');
 const { requireUser } = require('../middleware/auth.middleware');
-const audioMimeTypes = new Set(['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus']);
+const audioMimeTypes = new Set(['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus', 'audio/webm']);
 const isAudio = (req) => audioMimeTypes.has((req.get('content-type') || '').split(';')[0]);
 router.use(requireUser);
 router.get('/', controller.list);

@@ -12,6 +12,9 @@ COPY package*.json ./
 # Instala solo dependencias de producción
 RUN npm ci --omit=dev
 
+# Convierte grabaciones WebM del navegador a OGG/Opus para WhatsApp.
+RUN apk add --no-cache ffmpeg
+
 # Copia el resto del código fuente
 COPY --chown=node:node . .
 

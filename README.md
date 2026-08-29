@@ -194,6 +194,11 @@ Meta and streams it to the UI, so Meta access tokens are never exposed to the
 browser. The chat composer uploads supported audio files to Meta, creates a
 pending `audio` message, and the worker sends it through the outbound queue.
 
+The UI can also record audio from the browser microphone, preview or discard it,
+and send it. Browsers that record `audio/webm` are converted by FFmpeg inside the
+Docker image to OGG/Opus before the upload to Meta. Keep the API and worker on
+the updated Docker image for this feature.
+
 Verified incoming webhooks are also queued. Once an owner connects the deployment's
 phone number through `/settings/whatsapp-account`, the worker creates contacts and
 conversations for incoming messages and updates delivery states from Meta status
