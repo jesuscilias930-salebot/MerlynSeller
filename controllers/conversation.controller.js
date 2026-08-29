@@ -8,7 +8,7 @@ res.status(error.status).json({ error: error.message })
 exports.list = async (req, res, next) =>
      {
          try { 
-        return res.json(await conversations.list(req.auth.organizationId)); 
+        return res.json(await conversations.list(req.auth.organizationId, req.auth.user.id)); 
     } catch (error) { 
         return handle(error, res, next);
      } 
@@ -25,6 +25,12 @@ exports.messages = async (req, res, next) => {
 exports.documentOptions = async (req, res, next) => {
     try {
         return res.json(await conversations.documentOptions(req.auth.organizationId, req.params.id));
+    } catch (error) { return handle(error, res, next); }
+};
+
+exports.markRead = async (req, res, next) => {
+    try {
+        return res.json(await conversations.markRead(req.auth.organizationId, req.auth.user.id, req.params.id));
     } catch (error) { return handle(error, res, next); }
 };
 

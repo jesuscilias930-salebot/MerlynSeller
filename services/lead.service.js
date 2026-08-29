@@ -28,7 +28,7 @@ exports.initialColumnId = async (client, organizationId) => {
   return result.rows[0].id;
 };
 
-exports.board = async (organizationId) => {
+exports.board = async (organizationId, userId) => {
   const columns = await db.query(
     'SELECT id, name, position FROM lead_columns WHERE organization_id = $1 ORDER BY position ASC, created_at ASC',
     [organizationId],
@@ -41,7 +41,12 @@ exports.board = async (organizationId) => {
       c.updated_at,
       ct.phone_number,
       ct.name,
-      latest.body AS last_message
+      latest.body AS last_message,
+      (SELECT COUNT(*)::int FROM messages m
+        WHERE m.conversation_id = c.id
+          AND m.direction = 'inbound'
+          AND m.created_at > COALESCE((SELECT last_read_at FROM conversation_read_states rs WHERE rs.conversation_id = c.id AND rs.user_id = $2), '-infinity'::timestamptz)
+      ) AS "unreadCount"
     FROM conversations c
     JOIN contacts ct ON ct.id = c.contact_id
     LEFT JOIN LATERAL (
@@ -53,7 +58,7 @@ exports.board = async (organizationId) => {
     ) latest ON true
     WHERE c.organization_id = $1
     ORDER BY c.updated_at DESC
-  `, [organizationId]);
+  `, [organizationId, userId]);
   const byColumn = new Map(columns.rows.map((column) => [column.id, []]));
   for (const lead of leads.rows) byColumn.get(lead.lead_column_id)?.push(lead);
   return columns.rows.map((column) => ({ ...column, leads: byColumn.get(column.id) || [] }));

@@ -5,7 +5,7 @@ const handle = (error, res, next) => (error.status
   : next(error));
 
 exports.board = async (req, res, next) => {
-  try { return res.json(await leads.board(req.auth.organizationId)); } catch (error) { return handle(error, res, next); }
+  try { return res.json(await leads.board(req.auth.organizationId, req.auth.user.id)); } catch (error) { return handle(error, res, next); }
 };
 
 exports.addColumn = async (req, res, next) => {

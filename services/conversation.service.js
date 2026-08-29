@@ -19,7 +19,19 @@ const validation = (schema, value) => {
   return parsed.data;
 };
 
-exports.list = async (organizationId) => (await db.query(`SELECT c.id, c.status, c.updated_at, ct.phone_number, ct.name, (SELECT body FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message FROM conversations c JOIN contacts ct ON ct.id = c.contact_id WHERE c.organization_id = $1 ORDER BY c.updated_at DESC`, [organizationId])).rows;
+exports.list = async (organizationId, userId) => (await db.query(`
+  SELECT c.id, c.status, c.updated_at, ct.phone_number, ct.name,
+    (SELECT body FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+    (SELECT COUNT(*)::int FROM messages m
+      WHERE m.conversation_id = c.id
+        AND m.direction = 'inbound'
+        AND m.created_at > COALESCE((SELECT last_read_at FROM conversation_read_states rs WHERE rs.conversation_id = c.id AND rs.user_id = $2), '-infinity'::timestamptz)
+    ) AS "unreadCount"
+  FROM conversations c
+  JOIN contacts ct ON ct.id = c.contact_id
+  WHERE c.organization_id = $1
+  ORDER BY c.updated_at DESC
+`, [organizationId, userId])).rows;
 exports.messages = async (organizationId, conversationId) => (await db.query('SELECT id, direction, type, body, media_id, filename, status, error_code, provider_message_id, created_at FROM messages WHERE organization_id = $1 AND conversation_id = $2 ORDER BY created_at ASC', [organizationId, conversationId])).rows;
 exports.documentOptions = async (organizationId, conversationId) => {
   const conversation = await db.query('SELECT 1 FROM conversations WHERE id = $1 AND organization_id = $2', [conversationId, organizationId]);
@@ -42,6 +54,16 @@ exports.documentOptions = async (organizationId, conversationId) => {
     FROM latest
     ORDER BY created_at DESC
   `, [organizationId])).rows;
+};
+exports.markRead = async (organizationId, userId, conversationId) => {
+  const result = await db.query(`
+    INSERT INTO conversation_read_states (conversation_id, user_id, last_read_at)
+    SELECT id, $3, now() FROM conversations WHERE id = $1 AND organization_id = $2
+    ON CONFLICT (conversation_id, user_id) DO UPDATE SET last_read_at = EXCLUDED.last_read_at
+    RETURNING conversation_id
+  `, [conversationId, organizationId, userId]);
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  return { marked: true };
 };
 exports.create = async (organizationId, input) => {
   const data = validation(createSchema, input);

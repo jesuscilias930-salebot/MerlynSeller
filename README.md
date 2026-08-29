@@ -125,6 +125,7 @@ Authenticated UI endpoints:
 | `POST /conversations` | Create/find a contact conversation |
 | `GET /conversations` | List conversations |
 | `GET /conversations/:id/messages` | List messages |
+| `POST /conversations/:id/read` | Marks inbound messages as read for the current user |
 | `POST /conversations/:id/messages/text` | Queue `{ "body": "..." }` for delivery |
 | `POST /conversations/:id/messages/document` | Queue a reusable Meta document `{ "mediaId": "...", "filename": "...", "caption": "..." }` |
 | `POST /conversations/:id/messages/document/upload` | Upload, send, and save a new PDF as reusable document (raw body; maximum 25 MB) |
