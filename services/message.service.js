@@ -185,7 +185,7 @@ exports.prepareAudio = async ({ buffer, contentType, filename }) => {
   if (metaAudioTypes.has(normalizedType)) {
     return { buffer, contentType: normalizedType, filename: requiredString(filename, 'filename', 240) };
   }
-  if (normalizedType === 'audio/webm') {
+  if (normalizedType === 'audio/webm' || normalizedType === 'audio/ogg') {
     const converted = await convertWebmToOgg(buffer);
     return { buffer: converted, contentType: 'audio/ogg', filename: 'recording.ogg' };
   }
