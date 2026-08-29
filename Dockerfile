@@ -23,5 +23,6 @@ USER node
 # Puerto en el que escucha la app (debe coincidir con la variable PORT)
 EXPOSE 3000
 
-# Comando de arranque
-CMD ["npm", "start"]
+# Aplica las migraciones pendientes antes de exponer la API. Así nuevas tablas
+# (por ejemplo las de automatizaciones) existen antes de recibir solicitudes.
+CMD ["sh", "-c", "npm run migrate && npm start"]
