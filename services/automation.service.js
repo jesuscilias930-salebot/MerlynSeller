@@ -67,7 +67,21 @@ const aiDetect = async (text, intents) => {
       model: process.env.OPENAI_AUTOMATION_MODEL,
       intentCount: intents.length,
     });
-    const response = await fetch('https://api.openai.com/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: process.env.OPENAI_AUTOMATION_MODEL, store: false, instructions: 'Classify the Spanish customer message using only the provided intent keys. Return intent keys that are explicitly requested. Never create keys.', input: `Intents: ${JSON.stringify(intents.map((intent) => ({ key: intent.key, examples: intent.examples })))}\nMessage: ${text}`, text: { format: { type: 'json_schema', name: 'intent_classification', strict: true, schema: { type: 'object', properties: { keys: { type: 'array', items: { type: 'string' } }, confidence: { type: 'number' } }, required: ['keys', 'confidence'], additionalProperties: false } } } }), signal: AbortSignal.timeout(8000) });
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.OPENAI_AUTOMATION_MODEL,
+        store: false,
+        instructions: 'Classify a Spanish customer message into only the supplied intents. An intent includes its key, name, and example phrases. Recognize clear semantic equivalents even when the customer uses different words or spelling; do not require a literal match. For example, a request to see available products, product list, options, or prices can be a request for a catalog when a catalog intent is supplied. Select an intent only when the customer clearly asks for that information. Return no keys when the message is unrelated or genuinely ambiguous. Never invent keys.',
+        input: JSON.stringify({
+          intents: intents.map((intent) => ({ key: intent.key, name: intent.name, examples: intent.examples })),
+          message: text,
+        }),
+        text: { format: { type: 'json_schema', name: 'intent_classification', strict: true, schema: { type: 'object', properties: { keys: { type: 'array', items: { type: 'string' } }, confidence: { type: 'number' } }, required: ['keys', 'confidence'], additionalProperties: false } } },
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
     const body = await response.json();
     if (!response.ok || body.error) {
       log('warn', 'Automation AI request failed', {
