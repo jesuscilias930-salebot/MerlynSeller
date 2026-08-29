@@ -12,6 +12,7 @@ router.use(requireUser);
 router.get('/', controller.list);
 router.post('/', controller.create);
 router.get('/:id/messages', controller.messages);
+router.post('/:id/messages/:messageId/learn-intent', controller.learnIntent);
 router.post('/:id/read', controller.markRead);
 router.patch('/:id/automation', controller.setAutoReply);
 router.get('/:id/document-options', controller.documentOptions);

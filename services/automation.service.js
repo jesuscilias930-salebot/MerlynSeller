@@ -54,6 +54,18 @@ exports.update = async (organizationId, id, input) => {
 };
 exports.remove = async (organizationId, id) => { const result = await db.query('DELETE FROM automation_intents WHERE id=$1 AND organization_id=$2 RETURNING id', [id, organizationId]); if (!result.rows[0]) { const error = new Error('Automation not found'); error.status = 404; throw error; } return { deleted: true }; };
 
+exports.learnFromMessage = async (organizationId, conversationId, messageId, intentId) => db.transaction(async (client) => {
+  const message = await client.query("SELECT body FROM messages WHERE id=$1 AND conversation_id=$2 AND organization_id=$3 AND direction='inbound' AND type='text'", [messageId, conversationId, organizationId]);
+  if (!message.rows[0]?.body) { const error = new Error('Only inbound text messages can be used as examples'); error.status = 400; throw error; }
+  const intent = await client.query('SELECT id, key, name, examples FROM automation_intents WHERE id=$1 AND organization_id=$2', [intentId, organizationId]);
+  if (!intent.rows[0]) { const error = new Error('Automation intent not found'); error.status = 404; throw error; }
+  const example = String(message.rows[0].body).trim().slice(0, 240);
+  const examples = [...(intent.rows[0].examples || []), example].filter((value, index, values) => value && values.findIndex((candidate) => normalize(candidate) === normalize(value)) === index).slice(-30);
+  await client.query('UPDATE automation_intents SET examples=$3, updated_at=now() WHERE id=$1 AND organization_id=$2', [intentId, organizationId, JSON.stringify(examples)]);
+  log('info', 'Automation example learned from message', { intentKey: intent.rows[0].key });
+  return { learned: true, intentId: intent.rows[0].id, intentName: intent.rows[0].name };
+});
+
 const aiDetect = async (text, intents) => {
   if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_AUTOMATION_MODEL) {
     log('warn', 'Automation AI skipped: OpenAI is not configured', {
