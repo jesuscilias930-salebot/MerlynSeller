@@ -144,6 +144,19 @@ exports.queueMedia = async (organizationId, conversationId, type, input) => {
   return { id: result.rows[0].id, status: 'pending', type };
 };
 
+// Reuses a Meta media id already uploaded by the organization. Scenario
+// evidence is therefore uploaded only once and can be sent to many leads.
+exports.queueExistingMedia = async (organizationId, conversationId, type, mediaId, caption) => {
+  if (type !== 'image') { const error = new Error('Only images can be reused as scenario evidence'); error.status = 400; throw error; }
+  const result = await db.query(
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status) SELECT $1, id, 'outbound', 'image', $3, $4, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
+    [organizationId, conversationId, caption || null, mediaId],
+  );
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  await outboundQueue().add('send-image', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
+  return { id: result.rows[0].id, status: 'pending', type: 'image' };
+};
+
 exports.media = async (organizationId, conversationId, messageId) => {
   const result = await db.query(
     "SELECT type, media_id FROM messages WHERE id = $1 AND conversation_id = $2 AND organization_id = $3 AND type IN ('audio', 'sticker', 'image', 'video', 'document')",

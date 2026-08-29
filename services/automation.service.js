@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const db = require('../lib/db');
 const conversations = require('./conversation.service');
+const scenarios = require('./scenario.service');
 
 const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 const words = (value) => normalize(value).split(' ').filter((word) => word.length > 1);
@@ -120,6 +121,7 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   const [conversation, intents] = await Promise.all([db.query('SELECT auto_reply_enabled FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]), exports.list(organizationId)]);
   if (!conversation.rows[0]?.auto_reply_enabled) return;
   const text = normalize(message.text?.body); if (!text) return;
+  if (await scenarios.processIncoming(organizationId, conversationId, text)) return;
   const active = intents.filter((intent) => intent.isActive);
   let matches = active.map((intent) => ({ intent, confidence: ruleScore(text, intent.examples || []) })).filter((match) => match.confidence >= 0.72);
   let source = 'rules';

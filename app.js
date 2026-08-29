@@ -13,6 +13,7 @@ const realtimeRoutes = require('./routes/realtime.routes');
 const leadRoutes = require('./routes/lead.routes');
 const remarketingRoutes = require('./routes/remarketing.routes');
 const automationRoutes = require('./routes/automation.routes');
+const scenarioRoutes = require('./routes/scenario.routes');
 
 const realtime = require('./lib/realtime'); //Load the module to conect redis with the conexions SSE de la UI
 
@@ -33,7 +34,7 @@ app.use(cookieParser());
 // different domains. Reject browser requests from an unexpected Origin before
 // they can perform a session-based state change. Requests without an Origin
 // remain available for server-to-server integrations and Postman testing.
-const browserSessionPaths = ['/auth', '/conversations', '/settings', '/leads', '/remarketing', '/automations'];
+const browserSessionPaths = ['/auth', '/conversations', '/settings', '/leads', '/remarketing', '/automations', '/scenarios'];
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 app.use((req, res, next) => {
   const isBrowserSessionRequest = browserSessionPaths.some((path) => req.path === path || req.path.startsWith(`${path}/`));
@@ -98,6 +99,7 @@ app.use('/realtime', realtimeRoutes);
 app.use('/leads', leadRoutes);
 app.use('/remarketing', remarketingRoutes);
 app.use('/automations', automationRoutes);
+app.use('/scenarios', scenarioRoutes);
 realtime.start();
 
 app.use((err, req, res, next) => {
