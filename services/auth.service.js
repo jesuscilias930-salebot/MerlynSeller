@@ -38,12 +38,14 @@ exports.createSession = async (accessToken) => {
 };
 
 exports.sessionCookie = sessionCookie;
+const requiresCrossSiteCookie = () => process.env.NODE_ENV === 'production' || /^https:\/\//.test(process.env.FRONTEND_ORIGIN || '');
+
 exports.cookieOptions = (expiresAt) => ({
   httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
+  secure: requiresCrossSiteCookie(),
   // The deployed UI and API use different Render subdomains. Modern browsers
   // require SameSite=None (with Secure) to include this cookie on UI API calls.
-  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  sameSite: requiresCrossSiteCookie() ? 'none' : 'lax',
   expires: expiresAt,
   path: '/',
 });
