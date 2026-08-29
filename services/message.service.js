@@ -159,11 +159,18 @@ exports.uploadMedia = async ({ buffer, contentType, filename }) => {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}` },
       body: form,
-      signal: AbortSignal.timeout(Number(process.env.WHATSAPP_REQUEST_TIMEOUT_MS || 10000)),
+      // Uploads can be much slower than a small JSON message, especially after
+      // converting a MOV file. Keep this separately configurable.
+      signal: AbortSignal.timeout(Number(process.env.WHATSAPP_MEDIA_UPLOAD_TIMEOUT_MS || 120000)),
     });
   } catch (error) {
-    console.error(JSON.stringify({ level: 'error', message: 'Meta media upload failed', errorType: error.name }));
-    throw new MessageError(502, 'Unable to reach Meta');
+    console.error(JSON.stringify({
+      level: 'error',
+      message: 'Meta media upload failed',
+      errorType: error.name,
+      errorMessage: error.message,
+    }));
+    throw new MessageError(502, error.name === 'TimeoutError' ? 'Media upload to Meta timed out' : 'Unable to reach Meta while uploading media');
   }
   const body = await response.json().catch(() => ({}));
   if (!response.ok || !body.id) {
