@@ -77,6 +77,14 @@ exports.setAutoReply = async (organizationId, conversationId, input) => {
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   return result.rows[0];
 };
+// Test-reset helper: the contact is intentionally kept so its visible name and
+// phone number remain available, while messages and scenario state are removed
+// through the conversation foreign-key cascades.
+exports.remove = async (organizationId, conversationId) => {
+  const result = await db.query('DELETE FROM conversations WHERE id=$1 AND organization_id=$2 RETURNING id', [conversationId, organizationId]);
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  return { deleted: true };
+};
 exports.create = async (organizationId, input) => {
   const data = validation(createSchema, input);
   return db.transaction(async (client) => {

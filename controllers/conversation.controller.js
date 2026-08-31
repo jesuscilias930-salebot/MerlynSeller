@@ -38,6 +38,9 @@ exports.markRead = async (req, res, next) => {
 exports.setAutoReply = async (req, res, next) => {
     try { return res.json(await conversations.setAutoReply(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); }
 };
+exports.remove = async (req, res, next) => {
+    try { return res.json(await conversations.remove(req.auth.organizationId, req.params.id)); } catch (error) { return handle(error, res, next); }
+};
 exports.learnIntent = async (req, res, next) => {
     try { return res.json(await automations.learnFromMessage(req.auth.organizationId, req.params.id, req.params.messageId, req.body.intentId)); } catch (error) { return handle(error, res, next); }
 };
