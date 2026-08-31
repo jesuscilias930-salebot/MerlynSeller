@@ -32,13 +32,36 @@ const intentSchema = z.object({
   key: z.string().trim().min(2).max(50).regex(/^[a-z0-9_]+$/),
   name: z.string().trim().min(2).max(80),
   responseBody: z.string().trim().max(4096).optional().nullable(),
-  action: z.enum(['text', 'send_catalog']),
+  action: z.enum(['text', 'send_catalog', 'send_shipping_info']),
   examples: z.array(z.string().trim().min(2).max(240)).min(1).max(30),
   isActive: z.boolean().default(true),
   priority: z.number().int().min(0).max(1000).default(0),
-}).superRefine((value, ctx) => { if (value.action === 'text' && !value.responseBody) ctx.addIssue({ code: 'custom', message: 'responseBody is required for text automations' }); });
+}).superRefine((value, ctx) => { if ((value.action === 'text' || value.action === 'send_shipping_info') && !value.responseBody) ctx.addIssue({ code: 'custom', message: 'responseBody is required for this automation' }); });
 const parse = (input) => { const result = intentSchema.safeParse(input); if (result.success) return result.data; const error = new Error(result.error.issues[0].message); error.status = 400; throw error; };
 const log = (level, message, fields = {}) => console.log(JSON.stringify({ level, message, ...fields }));
+
+const hasReceivedCatalog = async (organizationId, conversationId) => Boolean((await db.query(`
+  SELECT EXISTS(
+    SELECT 1
+    FROM messages message
+    JOIN catalog_documents catalog
+      ON catalog.organization_id = message.organization_id
+     AND catalog.media_id = message.media_id
+    WHERE message.organization_id = $1
+      AND message.conversation_id = $2
+      AND message.direction = 'outbound'
+      AND message.type = 'document'
+  ) AS "sent"
+`, [organizationId, conversationId])).rows[0]?.sent);
+
+const sendShippingInfo = async (organizationId, conversationId, body) => {
+  if (!await hasReceivedCatalog(organizationId, conversationId)) {
+    const catalog = await db.query('SELECT media_id, filename, caption FROM catalog_documents WHERE organization_id=$1', [organizationId]);
+    if (catalog.rows[0]) await conversations.queueDocument(organizationId, conversationId, { mediaId: catalog.rows[0].media_id, filename: catalog.rows[0].filename || undefined, caption: catalog.rows[0].caption || undefined });
+    else log('warn', 'Shipping automation could not send catalog: catalog is not configured', { conversationId });
+  }
+  await conversations.queueText(organizationId, conversationId, { body });
+};
 
 exports.list = async (organizationId) => (await db.query('SELECT id, key, name, response_body AS "responseBody", action, examples, is_active AS "isActive", priority, created_at, updated_at FROM automation_intents WHERE organization_id = $1 ORDER BY priority DESC, name ASC', [organizationId])).rows;
 exports.create = async (organizationId, input) => {
@@ -130,11 +153,14 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   const unique = [...new Map(matches.sort((a, b) => b.intent.priority - a.intent.priority).map((match) => [match.intent.id, match])).values()];
   const event = await db.query('INSERT INTO automation_events (organization_id, conversation_id, inbound_provider_message_id, detected_intents, source, confidence, outcome) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (inbound_provider_message_id) DO NOTHING RETURNING id', [organizationId, conversationId, message.id, JSON.stringify(unique.map((match) => match.intent.key)), source, unique[0]?.confidence || null, unique.length ? 'queued' : 'no_match']);
   if (!event.rows[0] || !unique.length) return;
+  const hasShippingInfo = unique.some(({ intent }) => intent.action === 'send_shipping_info');
   for (const { intent } of unique) {
+    if (hasShippingInfo && intent.action === 'send_catalog') continue;
     if (intent.action === 'send_catalog') {
       const catalog = await db.query('SELECT media_id, filename, caption FROM catalog_documents WHERE organization_id=$1', [organizationId]);
       if (catalog.rows[0]) await conversations.queueDocument(organizationId, conversationId, { mediaId: catalog.rows[0].media_id, filename: catalog.rows[0].filename || undefined, caption: catalog.rows[0].caption || undefined });
     }
+    else if (intent.action === 'send_shipping_info') await sendShippingInfo(organizationId, conversationId, intent.responseBody);
     else await conversations.queueText(organizationId, conversationId, { body: intent.responseBody });
   }
 };
