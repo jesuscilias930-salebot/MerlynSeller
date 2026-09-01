@@ -8,7 +8,7 @@ const realtime = require('./lib/realtime');
 
 const outbound = new Worker('outbound-messages', async (job) => {
 
-  const result = await db.query(`SELECT m.id, m.type, m.body, m.media_id, m.filename, m.organization_id, m.conversation_id, c.phone_number FROM messages m JOIN conversations cv ON cv.id = m.conversation_id JOIN contacts c ON c.id = cv.contact_id WHERE m.id = $1 AND m.status = 'pending'`, [job.data.messageId]);
+  const result = await db.query(`SELECT m.id, m.type, m.body, m.media_id, m.filename, m.organization_id, m.conversation_id, c.phone_number, replied.provider_message_id AS reply_to_provider_message_id FROM messages m JOIN conversations cv ON cv.id = m.conversation_id JOIN contacts c ON c.id = cv.contact_id LEFT JOIN messages replied ON replied.id = m.reply_to_message_id WHERE m.id = $1 AND m.status = 'pending'`, [job.data.messageId]);
   const message = result.rows[0];
 
   if (!message) return;
@@ -21,7 +21,7 @@ const outbound = new Worker('outbound-messages', async (job) => {
           ? await messageService.sendAttachment({ to: message.phone_number, type: 'audio', id: message.media_id })
           : message.type === 'video'
             ? await messageService.sendVideo({ to: message.phone_number, id: message.media_id })
-        : await messageService.sendText({ to: message.phone_number, body: message.body });
+        : await messageService.sendText({ to: message.phone_number, body: message.body, replyToProviderMessageId: message.reply_to_provider_message_id || undefined });
 
     await db.query("UPDATE messages SET status = 'sent', provider_message_id = $2, updated_at = now() WHERE id = $1", [message.id, sent.messages[0]?.id || null]);
     await realtime.publish(message.organization_id, 'message.sent', message.conversation_id);

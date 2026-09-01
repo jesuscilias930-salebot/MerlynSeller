@@ -65,6 +65,10 @@ const optionalText = (value, field, maximumLength) => (
   value === undefined ? undefined : requiredString(value, field, maximumLength)
 );
 
+const replyContext = (value) => value === undefined ? {} : {
+  context: { message_id: requiredString(value, 'replyToProviderMessageId', 256) },
+};
+
 const metaAudioTypes = new Set(['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus']);
 const metaVideoTypes = new Set(['video/mp4', 'video/3gpp']);
 
@@ -245,6 +249,7 @@ exports.sendText = async (input) => send({
     preview_url: input.previewUrl === true,
     body: requiredString(input.body, 'body', 4096),
   },
+  ...replyContext(input.replyToProviderMessageId),
 });
 
 exports.sendVideo = async (input) => {

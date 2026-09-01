@@ -6,7 +6,7 @@ const messageService = require('./message.service');
 
 const phone = z.string().trim().transform((value) => value.replace(/^\+/, '')).refine((value) => /^\d{8,15}$/.test(value), 'phoneNumber must be E.164');
 const createSchema = z.object({ phoneNumber: phone, name: z.string().trim().max(120).optional() });
-const textSchema = z.object({ body: z.string().trim().min(1).max(4096) });
+const textSchema = z.object({ body: z.string().trim().min(1).max(4096), replyToMessageId: z.string().uuid().optional() });
 const autoReplySchema = z.object({ enabled: z.boolean() });
 const documentSchema = z.object({
   mediaId: z.string().trim().min(1).max(256),
@@ -38,7 +38,14 @@ exports.list = async (organizationId, userId) => (await db.query(`
   WHERE c.organization_id = $1
   ORDER BY c.updated_at DESC
 `, [organizationId, userId])).rows;
-exports.messages = async (organizationId, conversationId) => (await db.query('SELECT id, direction, type, body, media_id, filename, status, error_code, provider_message_id, created_at FROM messages WHERE organization_id = $1 AND conversation_id = $2 ORDER BY created_at ASC', [organizationId, conversationId])).rows;
+exports.messages = async (organizationId, conversationId) => (await db.query(`
+  SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename, m.status, m.error_code, m.provider_message_id, m.created_at,
+    m.reply_to_message_id AS "replyToMessageId", replied.body AS "replyToBody", replied.type AS "replyToType", replied.direction AS "replyToDirection"
+  FROM messages m
+  LEFT JOIN messages replied ON replied.id = m.reply_to_message_id
+  WHERE m.organization_id = $1 AND m.conversation_id = $2
+  ORDER BY m.created_at ASC
+`, [organizationId, conversationId])).rows;
 exports.documentOptions = async (organizationId, conversationId) => {
   const conversation = await db.query('SELECT 1 FROM conversations WHERE id = $1 AND organization_id = $2', [conversationId, organizationId]);
   if (!conversation.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
@@ -100,7 +107,11 @@ exports.create = async (organizationId, input) => {
 };
 exports.queueText = async (organizationId, conversationId, input) => {
   const data = validation(textSchema, input);
-  const result = await db.query('INSERT INTO messages (organization_id, conversation_id, direction, type, body, status) SELECT $1, id, $3, $4, $5, $6 FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id', [organizationId, conversationId, 'outbound', 'text', data.body, 'pending']);
+  if (data.replyToMessageId) {
+    const referenced = await db.query('SELECT provider_message_id FROM messages WHERE id=$1 AND organization_id=$2 AND conversation_id=$3', [data.replyToMessageId, organizationId, conversationId]);
+    if (!referenced.rows[0]?.provider_message_id) { const error = new Error('El mensaje seleccionado todavía no está disponible para responder'); error.status = 400; throw error; }
+  }
+  const result = await db.query('INSERT INTO messages (organization_id, conversation_id, direction, type, body, status, reply_to_message_id) SELECT $1, id, $3, $4, $5, $6, $7 FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id', [organizationId, conversationId, 'outbound', 'text', data.body, 'pending', data.replyToMessageId || null]);
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add('send-text', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
   return { id: result.rows[0].id, status: 'pending' };

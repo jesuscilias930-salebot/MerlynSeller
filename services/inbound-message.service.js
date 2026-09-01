@@ -32,7 +32,17 @@ const saveMessage = async (organizationId, message, contactName) => {
     );
     const initialColumnId = await leads.initialColumnId(client, organizationId);
     const conversation = await client.query("INSERT INTO conversations (organization_id, contact_id, lead_column_id) VALUES ($1, $2, $3) ON CONFLICT (organization_id, contact_id) DO UPDATE SET updated_at = now(), status = 'open', lead_column_id = COALESCE(conversations.lead_column_id, EXCLUDED.lead_column_id) RETURNING id", [organizationId, contact.rows[0].id, initialColumnId]);
-    const inserted = await client.query("INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, filename, status, provider_message_id) VALUES ($1, $2, 'inbound', $3, $4, $5, $6, 'received', $7) ON CONFLICT (provider_message_id) DO NOTHING RETURNING id", [organizationId, conversation.rows[0].id, message.type || 'unknown', textFor(message), mediaIdFor(message), filenameFor(message), message.id]);
+    // Meta adds context.id when the customer used WhatsApp's Reply action.
+    // Resolve that provider id inside this conversation so unrelated messages
+    // can never be linked merely because of a malformed webhook payload.
+    const repliedProviderMessageId = message.context?.id || null;
+    const inserted = await client.query(`
+      INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, filename, status, provider_message_id, reply_to_message_id)
+      VALUES ($1, $2, 'inbound', $3, $4, $5, $6, 'received', $7,
+        (SELECT id FROM messages WHERE organization_id=$1 AND conversation_id=$2 AND provider_message_id=$8))
+      ON CONFLICT (provider_message_id) DO NOTHING
+      RETURNING id
+    `, [organizationId, conversation.rows[0].id, message.type || 'unknown', textFor(message), mediaIdFor(message), filenameFor(message), message.id, repliedProviderMessageId]);
     return { conversationId: conversation.rows[0].id, inserted: inserted.rowCount > 0 };
   });
   if (result.inserted) {
