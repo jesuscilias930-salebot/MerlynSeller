@@ -1,6 +1,11 @@
 const router = require('express').Router();
 const controller = require('../controllers/settings.controller');
 const { requireUser, requireRole } = require('../middleware/auth.middleware');
+const isPdf = (req) => (req.get('content-type') || '').split(';')[0] === 'application/pdf';
 router.post('/whatsapp-account', requireUser, requireRole('owner', 'admin'), controller.connectWhatsApp);
 router.post('/catalog-document', requireUser, requireRole('owner', 'admin'), controller.configureCatalogDocument);
+router.get('/document-templates', requireUser, controller.listDocumentTemplates);
+router.post('/document-templates/upload', requireUser, requireRole('owner', 'admin'), require('express').raw({ type: isPdf, limit: '25mb' }), controller.uploadDocumentTemplate);
+router.patch('/document-templates/:id', requireUser, requireRole('owner', 'admin'), controller.updateDocumentTemplate);
+router.delete('/document-templates/:id', requireUser, requireRole('owner', 'admin'), controller.deleteDocumentTemplate);
 module.exports = router;

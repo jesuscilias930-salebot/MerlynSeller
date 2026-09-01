@@ -51,6 +51,10 @@ exports.documentOptions = async (organizationId, conversationId) => {
       SELECT media_id, COALESCE(filename, 'Catalogo') AS filename, caption, updated_at AS created_at
       FROM catalog_documents
       WHERE organization_id = $1
+      UNION ALL
+      SELECT media_id, filename, caption, updated_at AS created_at
+      FROM document_templates
+      WHERE organization_id = $1
     ), latest AS (
       SELECT DISTINCT ON (media_id) media_id, filename, caption, created_at
       FROM document_sources
