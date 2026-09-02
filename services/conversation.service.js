@@ -21,7 +21,7 @@ const validation = (schema, value) => {
 };
 
 exports.list = async (organizationId, userId) => (await db.query(`
-  SELECT c.id, c.status, c.updated_at, c.auto_reply_enabled AS "autoReplyEnabled", c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
+  SELECT c.id, c.contact_id AS "contactId", c.status, c.updated_at, c.auto_reply_enabled AS "autoReplyEnabled", c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
     latest.body AS last_message,
     latest.direction AS "lastDirection",
     (c.status = 'open' AND latest.direction = 'inbound') AS "needsResponse",

@@ -36,6 +36,7 @@ exports.board = async (organizationId, userId) => {
   const leads = await db.query(`
     SELECT
       c.id,
+      c.contact_id AS "contactId",
       c.lead_column_id,
       c.auto_reply_enabled AS "autoReplyEnabled",
       c.status,
