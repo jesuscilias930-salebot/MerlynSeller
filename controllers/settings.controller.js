@@ -106,3 +106,78 @@ exports.deleteDocumentTemplate = async (req, res, next) => {
     return res.status(204).end();
   } catch (error) { return next(error); }
 };
+
+const entrepreneurPackageSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  caption: z.string().trim().max(1024).nullable().optional(),
+});
+
+const packageResponse = (row) => ({
+  id: row.id,
+  name: row.name,
+  mediaId: row.media_id,
+  filename: row.filename,
+  caption: row.caption,
+  position: row.position,
+  created_at: row.created_at,
+  updated_at: row.updated_at,
+});
+
+exports.listEntrepreneurPackages = async (req, res, next) => {
+  try {
+    const result = await db.query('SELECT * FROM entrepreneur_packages WHERE organization_id=$1 ORDER BY position ASC, created_at ASC', [req.auth.organizationId]);
+    return res.json(result.rows.map(packageResponse));
+  } catch (error) { return next(error); }
+};
+
+exports.uploadEntrepreneurPackage = async (req, res, next) => {
+  try {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Package image is required' });
+    const contentType = (req.get('content-type') || '').split(';')[0].toLowerCase();
+    const filename = decodeURIComponent(req.get('x-upload-filename') || 'paquete-emprendedor');
+    const requestedName = decodeURIComponent(req.get('x-package-name') || filename.replace(/\.[^.]+$/, '')).trim();
+    const parsed = entrepreneurPackageSchema.pick({ name: true }).safeParse({ name: requestedName });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
+    const uploaded = await messageService.uploadMedia({ buffer: req.body, contentType, filename });
+    const result = await db.query(`
+      INSERT INTO entrepreneur_packages (organization_id, name, media_id, filename, position)
+      VALUES ($1, $2, $3, $4, COALESCE((SELECT MAX(position) + 1 FROM entrepreneur_packages WHERE organization_id=$1), 0))
+      RETURNING *
+    `, [req.auth.organizationId, parsed.data.name, uploaded.mediaId, filename]);
+    return res.status(201).json(packageResponse(result.rows[0]));
+  } catch (error) { return next(error); }
+};
+
+exports.updateEntrepreneurPackage = async (req, res, next) => {
+  try {
+    const parsed = entrepreneurPackageSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
+    const value = parsed.data;
+    const result = await db.query(`
+      UPDATE entrepreneur_packages
+      SET name=COALESCE($3,name), caption=COALESCE($4,caption), updated_at=now()
+      WHERE id=$1 AND organization_id=$2
+      RETURNING *
+    `, [req.params.id, req.auth.organizationId, value.name, value.caption]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Entrepreneur package not found' });
+    return res.json(packageResponse(result.rows[0]));
+  } catch (error) { return next(error); }
+};
+
+exports.deleteEntrepreneurPackage = async (req, res, next) => {
+  try {
+    const result = await db.query('DELETE FROM entrepreneur_packages WHERE id=$1 AND organization_id=$2 RETURNING id', [req.params.id, req.auth.organizationId]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Entrepreneur package not found' });
+    return res.status(204).end();
+  } catch (error) { return next(error); }
+};
+
+exports.entrepreneurPackageMedia = async (req, res, next) => {
+  try {
+    const result = await db.query('SELECT media_id FROM entrepreneur_packages WHERE id=$1 AND organization_id=$2', [req.params.id, req.auth.organizationId]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Entrepreneur package not found' });
+    const media = await messageService.downloadMedia(result.rows[0].media_id);
+    res.set({ 'Content-Type': media.contentType, 'Cache-Control': 'private, max-age=300' });
+    return res.send(media.buffer);
+  } catch (error) { return next(error); }
+};

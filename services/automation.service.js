@@ -27,6 +27,23 @@ const ruleScore = (text, examples) => Math.max(0, ...examples.map((example) => {
   const matches = exampleWords.filter((exampleWord) => textWords.some((textWord) => similarWord(exampleWord, textWord))).length;
   return exampleWords.length ? matches / exampleWords.length : 0;
 }));
+const hasSimilarWord = (text, candidates) => {
+  const textWords = words(text);
+  return candidates.some((candidate) => textWords.some((word) => similarWord(word, candidate)));
+};
+const isShippingQuestion = (text) => {
+  const shippingMentioned = hasSimilarWord(text, ['envio', 'flete', 'paqueteria', 'mensajeria', 'domicilio']);
+  if (!shippingMentioned) return false;
+  return hasSimilarWord(text, ['precio', 'costo', 'cuanto', 'sale', 'hacen', 'hace', 'realizan', 'mandan', 'llega', 'ciudad', 'colonia', 'postal', 'republica', 'mexico'])
+    || normalize(text).includes('codigo postal');
+};
+const isExplicitCatalogRequest = (text) => hasSimilarWord(text, ['catalogo', 'catalogue'])
+  || normalize(text).includes('lista de productos')
+  || normalize(text).includes('ver los productos');
+const isProductPriceQuestion = (text) => {
+  if (isShippingQuestion(text) || isExplicitCatalogRequest(text)) return false;
+  return hasSimilarWord(text, ['precio', 'precios', 'cuanto', 'costo', 'vale', 'sale']);
+};
 
 const intentSchema = z.object({
   key: z.string().trim().min(2).max(50).regex(/^[a-z0-9_]+$/),
@@ -109,9 +126,9 @@ const aiDetect = async (text, intents) => {
       body: JSON.stringify({
         model: process.env.OPENAI_AUTOMATION_MODEL,
         store: false,
-        instructions: 'Classify a Spanish customer message into only the supplied intents. An intent includes its key, name, and example phrases. Recognize clear semantic equivalents even when the customer uses different words or spelling; do not require a literal match. For example, a request to see available products, product list, options, or prices can be a request for a catalog when a catalog intent is supplied. Select an intent only when the customer clearly asks for that information. Return no keys when the message is unrelated or genuinely ambiguous. Never invent keys.',
+        instructions: 'Classify a Spanish customer message into only the supplied intents. An intent includes its key, name, action, and example phrases. Recognize clear semantic equivalents even with spelling mistakes; do not require literal matches. Treat a request for a catalog, product list, available products, or product options as a catalog request only when the message explicitly asks to see or receive those materials. A question about shipping cost, delivery, freight, city, postal code, or carrier is shipping information, never a catalog request just because it contains the word price. A question about a product price is not a catalog request unless it explicitly asks for the catalog. Select only the most specific applicable intent. Return no keys when the message is unrelated or genuinely ambiguous. Never invent keys.',
         input: JSON.stringify({
-          intents: intents.map((intent) => ({ key: intent.key, name: intent.name, examples: intent.examples })),
+          intents: intents.map((intent) => ({ key: intent.key, name: intent.name, action: intent.action, examples: intent.examples })),
           message: text,
         }),
         text: { format: { type: 'json_schema', name: 'intent_classification', strict: true, schema: { type: 'object', properties: { keys: { type: 'array', items: { type: 'string' } }, confidence: { type: 'number' } }, required: ['keys', 'confidence'], additionalProperties: false } } },
@@ -146,21 +163,43 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   const text = normalize(message.text?.body); if (!text) return;
   if (await scenarios.processIncoming(organizationId, conversationId, text)) return;
   const active = intents.filter((intent) => intent.isActive);
-  let matches = active.map((intent) => ({ intent, confidence: ruleScore(text, intent.examples || []) })).filter((match) => match.confidence >= 0.72);
-  let source = 'rules';
-  if (!matches.length) { matches = await aiDetect(text, active); source = matches.length ? 'ai' : 'none'; }
-  log('info', 'Automation intent evaluated', { source, matchedIntentCount: matches.length });
-  const unique = [...new Map(matches.sort((a, b) => b.intent.priority - a.intent.priority).map((match) => [match.intent.id, match])).values()];
-  const event = await db.query('INSERT INTO automation_events (organization_id, conversation_id, inbound_provider_message_id, detected_intents, source, confidence, outcome) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (inbound_provider_message_id) DO NOTHING RETURNING id', [organizationId, conversationId, message.id, JSON.stringify(unique.map((match) => match.intent.key)), source, unique[0]?.confidence || null, unique.length ? 'queued' : 'no_match']);
-  if (!event.rows[0] || !unique.length) return;
-  const hasShippingInfo = unique.some(({ intent }) => intent.action === 'send_shipping_info');
-  for (const { intent } of unique) {
-    if (hasShippingInfo && intent.action === 'send_catalog') continue;
-    if (intent.action === 'send_catalog') {
-      const catalog = await db.query('SELECT media_id, filename, caption FROM catalog_documents WHERE organization_id=$1', [organizationId]);
-      if (catalog.rows[0]) await conversations.queueDocument(organizationId, conversationId, { mediaId: catalog.rows[0].media_id, filename: catalog.rows[0].filename || undefined, caption: catalog.rows[0].caption || undefined });
+  const shippingQuestion = isShippingQuestion(text);
+  const productPriceQuestion = isProductPriceQuestion(text);
+  let matches;
+  let source;
+  if (shippingQuestion) {
+    // Shipping is an explicit business topic. It must never fall through to a
+    // generic catalog response merely because the message also says "precio".
+    matches = active.filter((intent) => intent.action === 'send_shipping_info').map((intent) => ({ intent, confidence: 1 }));
+    source = matches.length ? 'shipping_guard' : 'shipping_unconfigured';
+  } else {
+    matches = active.map((intent) => ({ intent, confidence: ruleScore(text, intent.examples || []) })).filter((match) => match.confidence >= 0.72);
+    source = 'rules';
+    if (!matches.length) { matches = await aiDetect(text, active); source = matches.length ? 'ai' : 'none'; }
+    // A price question can use a dedicated text automation, but cannot cause a
+    // document to be sent unless the customer explicitly requested the catalog.
+    if (productPriceQuestion) {
+      matches = matches.filter(({ intent }) => intent.action !== 'send_catalog');
+      if (!matches.length) {
+        matches = await aiDetect(text, active.filter((intent) => intent.action !== 'send_catalog'));
+        source = matches.length ? 'price_guard_ai' : 'price_guard_no_match';
+      }
     }
-    else if (intent.action === 'send_shipping_info') await sendShippingInfo(organizationId, conversationId, intent.responseBody);
-    else await conversations.queueText(organizationId, conversationId, { body: intent.responseBody });
   }
+  const ranked = [...new Map(matches
+    .sort((left, right) => right.confidence - left.confidence || right.intent.priority - left.intent.priority)
+    .map((match) => [match.intent.id, match])).values()];
+  // One inbound message has one primary intent. Shipping itself can send the
+  // catalog when it is missing, so separate catalog jobs are never necessary.
+  const selected = ranked.slice(0, 1);
+  log('info', 'Automation intent evaluated', { source, shippingQuestion, productPriceQuestion, matchedIntentCount: selected.length, selectedIntent: selected[0]?.intent.key || null });
+  const event = await db.query('INSERT INTO automation_events (organization_id, conversation_id, inbound_provider_message_id, detected_intents, source, confidence, outcome) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (inbound_provider_message_id) DO NOTHING RETURNING id', [organizationId, conversationId, message.id, JSON.stringify(selected.map((match) => match.intent.key)), source, selected[0]?.confidence || null, selected.length ? 'queued' : 'no_match']);
+  if (!event.rows[0] || !selected.length) return;
+  const { intent } = selected[0];
+  if (intent.action === 'send_catalog') {
+    const catalog = await db.query('SELECT media_id, filename, caption FROM catalog_documents WHERE organization_id=$1', [organizationId]);
+    if (catalog.rows[0]) await conversations.queueDocument(organizationId, conversationId, { mediaId: catalog.rows[0].media_id, filename: catalog.rows[0].filename || undefined, caption: catalog.rows[0].caption || undefined });
+  }
+  else if (intent.action === 'send_shipping_info') await sendShippingInfo(organizationId, conversationId, intent.responseBody);
+  else await conversations.queueText(organizationId, conversationId, { body: intent.responseBody });
 };

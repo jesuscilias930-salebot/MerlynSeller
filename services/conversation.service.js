@@ -180,6 +180,34 @@ exports.queueExistingMedia = async (organizationId, conversationId, type, mediaI
   return { id: result.rows[0].id, status: 'pending', type: 'image' };
 };
 
+exports.queueEntrepreneurPackages = async (organizationId, conversationId, input) => {
+  const parsed = z.object({ packageIds: z.array(z.string().uuid()).min(1).max(20) }).safeParse(input);
+  if (!parsed.success) {
+    const error = new Error(parsed.error.issues[0].message);
+    error.status = 400;
+    throw error;
+  }
+  const requestedIds = parsed.data.packageIds;
+  const templates = await db.query(
+    'SELECT id, media_id, caption FROM entrepreneur_packages WHERE organization_id=$1 AND id = ANY($2::uuid[])',
+    [organizationId, requestedIds],
+  );
+  const byId = new Map(templates.rows.map((row) => [row.id, row]));
+  if (byId.size !== requestedIds.length) {
+    const error = new Error('One or more entrepreneur packages were not found');
+    error.status = 404;
+    throw error;
+  }
+  // Preserve the order selected in the UI; each image becomes its own queued
+  // WhatsApp message and is delivered by the existing outbound worker.
+  const queued = [];
+  for (const packageId of requestedIds) {
+    const item = byId.get(packageId);
+    queued.push(await exports.queueExistingMedia(organizationId, conversationId, 'image', item.media_id, item.caption));
+  }
+  return { queued };
+};
+
 exports.media = async (organizationId, conversationId, messageId) => {
   const result = await db.query(
     "SELECT type, media_id FROM messages WHERE id = $1 AND conversation_id = $2 AND organization_id = $3 AND type IN ('audio', 'sticker', 'image', 'video', 'document')",

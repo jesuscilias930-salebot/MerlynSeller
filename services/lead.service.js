@@ -4,6 +4,7 @@ const realtime = require('../lib/realtime');
 
 const columnSchema = z.object({ name: z.string().trim().min(2).max(80) });
 const moveSchema = z.object({ columnId: z.string().uuid() });
+const reorderSchema = z.object({ columnIds: z.array(z.string().uuid()).min(1).max(100) });
 
 const validate = (schema, value) => {
   const parsed = schema.safeParse(value);
@@ -85,6 +86,34 @@ exports.addColumn = async (organizationId, input) => {
     }
     throw error;
   }
+};
+
+exports.reorderColumns = async (organizationId, input) => {
+  const data = validate(reorderSchema, input);
+  const result = await db.transaction(async (client) => {
+    // Lock the organization's columns so two administrators cannot persist
+    // conflicting orders at the same time.
+    const existing = await client.query(
+      'SELECT id FROM lead_columns WHERE organization_id = $1 FOR UPDATE',
+      [organizationId],
+    );
+    const expectedIds = new Set(existing.rows.map((row) => row.id));
+    const receivedIds = new Set(data.columnIds);
+    if (expectedIds.size !== receivedIds.size || [...expectedIds].some((id) => !receivedIds.has(id))) {
+      const error = new Error('The column order must include every pipeline column exactly once');
+      error.status = 400;
+      throw error;
+    }
+    await client.query(`
+      UPDATE lead_columns AS columns
+      SET position = ordered.position
+      FROM unnest($2::uuid[]) WITH ORDINALITY AS ordered(id, position)
+      WHERE columns.id = ordered.id AND columns.organization_id = $1
+    `, [organizationId, data.columnIds]);
+    return data.columnIds;
+  });
+  await realtime.publish(organizationId, 'lead.columns_reordered');
+  return { columnIds: result };
 };
 
 exports.removeColumn = async (organizationId, columnId) => {
