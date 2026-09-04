@@ -171,22 +171,11 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   const [conversation, intents] = await Promise.all([db.query('SELECT auto_reply_enabled FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]), exports.list(organizationId)]);
   if (!conversation.rows[0]?.auto_reply_enabled) return;
   const text = normalize(message.text?.body); if (!text) return;
-  // Shipping is a global question: it may be answered without discarding the
-  // guided-sales state that was waiting for a different answer. Every other
-  // message is owned by the active scenario first.
+  // A configured scenario always has the first chance to route the message.
+  // This permits a scenario such as "Envíos nacionales" to use "hace envíos"
+  // as its start trigger, including when it replaces another active scenario.
   const shippingQuestion = isShippingQuestion(text);
   const active = intents.filter((intent) => intent.isActive);
-  if (shippingQuestion) {
-    const configured = active.find((intent) => intent.action === 'send_shipping_info');
-    if (!configured) {
-      const moved = await leads.moveToAttention(organizationId, conversationId);
-      log('info', 'Shipping question escalated to human attention: no active shipping automation', { conversationId, movedToAttention: moved });
-      return;
-    }
-    await sendShippingInfo(organizationId, conversationId, configured.responseBody);
-    log('info', 'Global shipping response sent', { conversationId, configured: true });
-    return;
-  }
   if (isSpecificQuoteRequest(text)) {
     const moved = await leads.moveToAttention(organizationId, conversationId);
     log('info', 'Specific quote request escalated to human attention', { conversationId, movedToAttention: moved });
@@ -194,6 +183,20 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   }
   const scenarioResult = await scenarios.processIncoming(organizationId, conversationId, text);
   if (scenarioResult.handled) return;
+  // No scenario started or handled this message, so preserve the normal
+  // shipping-answer behavior for organizations that use an automation instead
+  // of a full scenario.
+  if (shippingQuestion) {
+    const configured = active.find((intent) => intent.action === 'send_shipping_info');
+    if (!configured) {
+      const moved = await leads.moveToAttention(organizationId, conversationId);
+      log('info', 'Shipping question escalated to human attention: no active shipping automation or matching scenario', { conversationId, movedToAttention: moved });
+      return;
+    }
+    await sendShippingInfo(organizationId, conversationId, configured.responseBody);
+    log('info', 'Global shipping response sent', { conversationId, configured: true });
+    return;
+  }
   if (scenarioResult.requiresHuman) {
     const moved = await leads.moveToAttention(organizationId, conversationId);
     log('info', 'Scenario escalated to human attention', { conversationId, movedToAttention: moved });
