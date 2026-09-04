@@ -21,6 +21,7 @@ router.get('/:id/messages/:messageId/media', controller.media);
 router.post('/:id/messages/text', controller.sendText);
 router.post('/:id/messages/document', controller.sendDocument);
 router.post('/:id/messages/entrepreneur-packages', controller.sendEntrepreneurPackages);
+router.post('/:id/messages/sticker', controller.sendSavedSticker);
 router.post('/:id/messages/document/upload', require('express').raw({ type: isPdf, limit: '25mb' }), controller.uploadDocument);
 router.post('/:id/messages/audio', require('express').raw({ type: isAudio, limit: '16mb' }), controller.sendAudio);
 router.post('/:id/messages/image', require('express').raw({ type: isImage, limit: '5mb' }), controller.sendImage);

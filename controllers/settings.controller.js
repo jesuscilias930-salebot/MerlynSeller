@@ -217,3 +217,27 @@ exports.entrepreneurPackageImageMedia = async (req, res, next) => {
     return res.send(media.buffer);
   } catch (error) { return next(error); }
 };
+
+exports.listStickers = async (req, res, next) => {
+  try { return res.json((await db.query('SELECT id, name, media_id AS "mediaId", filename, position, created_at FROM saved_stickers WHERE organization_id=$1 ORDER BY position, created_at', [req.auth.organizationId])).rows); }
+  catch (error) { return next(error); }
+};
+exports.uploadSticker = async (req, res, next) => {
+  try {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'Sticker WEBP is required' });
+    const filename = decodeURIComponent(req.get('x-upload-filename') || 'sticker.webp').trim();
+    const name = decodeURIComponent(req.get('x-sticker-name') || filename.replace(/\.[^.]+$/, '')).trim();
+    if (!name || name.length > 120) return res.status(400).json({ error: 'Sticker name is required' });
+    const uploaded = await messageService.uploadMedia({ buffer: req.body, contentType: 'image/webp', filename });
+    const result = await db.query(`INSERT INTO saved_stickers (organization_id, name, media_id, filename, position) VALUES ($1,$2,$3,$4,COALESCE((SELECT MAX(position)+1 FROM saved_stickers WHERE organization_id=$1),0)) RETURNING id, name, media_id AS "mediaId", filename, position, created_at`, [req.auth.organizationId, name, uploaded.mediaId, filename]);
+    return res.status(201).json(result.rows[0]);
+  } catch (error) { return next(error); }
+};
+exports.deleteSticker = async (req, res, next) => {
+  try { const result = await db.query('DELETE FROM saved_stickers WHERE id=$1 AND organization_id=$2 RETURNING id', [req.params.id, req.auth.organizationId]); if (!result.rows[0]) return res.status(404).json({ error: 'Sticker not found' }); return res.status(204).end(); }
+  catch (error) { return next(error); }
+};
+exports.stickerMedia = async (req, res, next) => {
+  try { const result = await db.query('SELECT media_id FROM saved_stickers WHERE id=$1 AND organization_id=$2', [req.params.id, req.auth.organizationId]); if (!result.rows[0]) return res.status(404).json({ error: 'Sticker not found' }); const media = await messageService.downloadMedia(result.rows[0].media_id); res.set({ 'Content-Type': media.contentType, 'Cache-Control': 'private, max-age=300' }); return res.send(media.buffer); }
+  catch (error) { return next(error); }
+};

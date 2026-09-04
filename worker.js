@@ -17,6 +17,8 @@ const outbound = new Worker('outbound-messages', async (job) => {
       ? await messageService.sendAttachment({ to: message.phone_number, type: 'document', id: message.media_id, filename: message.filename || undefined, caption: message.body || undefined })
       : message.type === 'image'
         ? await messageService.sendAttachment({ to: message.phone_number, type: 'image', id: message.media_id, caption: message.body || undefined })
+        : message.type === 'sticker'
+          ? await messageService.sendAttachment({ to: message.phone_number, type: 'sticker', id: message.media_id })
         : message.type === 'audio'
           ? await messageService.sendAttachment({ to: message.phone_number, type: 'audio', id: message.media_id })
           : message.type === 'video'

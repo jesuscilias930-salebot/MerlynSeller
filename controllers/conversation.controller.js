@@ -74,6 +74,10 @@ exports.sendEntrepreneurPackages = async (req, res, next) => {
         return res.status(202).json(await conversations.queueEntrepreneurPackages(req.auth.organizationId, req.params.id, req.body));
     } catch (error) { return handle(error, res, next); }
 };
+exports.sendSavedSticker = async (req, res, next) => {
+  try { return res.status(202).json(await conversations.queueSavedSticker(req.auth.organizationId, req.params.id, req.body.stickerId)); }
+  catch (error) { return handle(error, res, next); }
+};
 
 exports.sendAudio = async (req, res, next) => {
     try {

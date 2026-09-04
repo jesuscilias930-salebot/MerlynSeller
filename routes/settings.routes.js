@@ -3,6 +3,7 @@ const controller = require('../controllers/settings.controller');
 const { requireUser, requireRole } = require('../middleware/auth.middleware');
 const isPdf = (req) => (req.get('content-type') || '').split(';')[0] === 'application/pdf';
 const isImage = (req) => ['image/jpeg', 'image/png', 'image/webp'].includes((req.get('content-type') || '').split(';')[0].toLowerCase());
+const isWebp = (req) => (req.get('content-type') || '').split(';')[0].toLowerCase() === 'image/webp';
 router.post('/whatsapp-account', requireUser, requireRole('owner', 'admin'), controller.connectWhatsApp);
 router.post('/catalog-document', requireUser, requireRole('owner', 'admin'), controller.configureCatalogDocument);
 router.get('/document-templates', requireUser, controller.listDocumentTemplates);
@@ -16,4 +17,8 @@ router.post('/entrepreneur-packages', requireUser, requireRole('owner', 'admin')
 router.post('/entrepreneur-packages/upload', requireUser, requireRole('owner', 'admin'), require('express').raw({ type: isImage, limit: '5mb' }), controller.uploadEntrepreneurPackage);
 router.patch('/entrepreneur-packages/:id', requireUser, requireRole('owner', 'admin'), controller.updateEntrepreneurPackage);
 router.delete('/entrepreneur-packages/:id', requireUser, requireRole('owner', 'admin'), controller.deleteEntrepreneurPackage);
+router.get('/stickers', requireUser, controller.listStickers);
+router.get('/stickers/:id/media', requireUser, controller.stickerMedia);
+router.post('/stickers/upload', requireUser, requireRole('owner', 'admin'), require('express').raw({ type: isWebp, limit: '500kb' }), controller.uploadSticker);
+router.delete('/stickers/:id', requireUser, requireRole('owner', 'admin'), controller.deleteSticker);
 module.exports = router;

@@ -170,14 +170,20 @@ exports.queueMedia = async (organizationId, conversationId, type, input) => {
 // Reuses a Meta media id already uploaded by the organization. Scenario
 // evidence is therefore uploaded only once and can be sent to many leads.
 exports.queueExistingMedia = async (organizationId, conversationId, type, mediaId, caption) => {
-  if (type !== 'image') { const error = new Error('Only images can be reused as scenario evidence'); error.status = 400; throw error; }
+  if (!['image', 'sticker'].includes(type)) { const error = new Error('Only images and stickers can be reused'); error.status = 400; throw error; }
   const result = await db.query(
-    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status) SELECT $1, id, 'outbound', 'image', $3, $4, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
-    [organizationId, conversationId, caption || null, mediaId],
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status) SELECT $1, id, 'outbound', $3, $4, $5, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
+    [organizationId, conversationId, type, type === 'image' ? caption || null : null, mediaId],
   );
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
-  await outboundQueue().add('send-image', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
-  return { id: result.rows[0].id, status: 'pending', type: 'image' };
+  await outboundQueue().add(`send-${type}`, { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
+  return { id: result.rows[0].id, status: 'pending', type };
+};
+
+exports.queueSavedSticker = async (organizationId, conversationId, stickerId) => {
+  const sticker = await db.query('SELECT media_id FROM saved_stickers WHERE id=$1 AND organization_id=$2', [stickerId, organizationId]);
+  if (!sticker.rows[0]) { const error = new Error('Sticker not found'); error.status = 404; throw error; }
+  return exports.queueExistingMedia(organizationId, conversationId, 'sticker', sticker.rows[0].media_id);
 };
 
 exports.queueEntrepreneurPackages = async (organizationId, conversationId, input) => {
