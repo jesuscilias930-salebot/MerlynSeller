@@ -59,6 +59,8 @@ const stepSchema = z.object({
   label: z.string().trim().min(1).max(100),
   body: z.string().max(4096).optional(),
   caption: z.string().max(1024).optional(),
+  fallbackBody: z.string().trim().max(4096).optional(),
+  resendCatalog: z.boolean().optional(),
   items: z
     .array(
       z.object({
@@ -236,7 +238,19 @@ exports.uploadEvidence = async (input) => {
   return messageService.uploadMedia(input);
 };
 
-const queueCatalog = async (organizationId, conversationId, caption) => {
+const hasSentCatalog = async (organizationId, conversationId) => Boolean((await db.query(`
+  SELECT EXISTS(
+    SELECT 1 FROM messages message
+    JOIN catalog_documents catalog
+      ON catalog.organization_id=message.organization_id
+     AND catalog.media_id=message.media_id
+    WHERE message.organization_id=$1
+      AND message.conversation_id=$2
+      AND message.direction='outbound'
+      AND message.type='document'
+  ) AS sent
+`, [organizationId, conversationId])).rows[0]?.sent);
+const queueCatalog = async (organizationId, conversationId, caption, force = false) => {
   const document = (
     await db.query(
       "SELECT media_id,filename FROM catalog_documents WHERE organization_id=$1",
@@ -248,11 +262,13 @@ const queueCatalog = async (organizationId, conversationId, caption) => {
     error.status = 400;
     throw error;
   }
+  if (!force && await hasSentCatalog(organizationId, conversationId)) return false;
   await conversations.queueDocument(organizationId, conversationId, {
     mediaId: document.media_id,
     filename: document.filename || undefined,
     caption: caption || undefined,
   });
+  return true;
 };
 const setCurrentStep = async (
   organizationId,
@@ -312,8 +328,10 @@ const run = async (
     await conversations.queueText(organizationId, conversationId, {
       body: step.body,
     });
-  if (step.type === "send_catalog")
-    await queueCatalog(organizationId, conversationId, step.caption);
+  if (step.type === "send_catalog") {
+    const sent = await queueCatalog(organizationId, conversationId, step.caption, step.resendCatalog === true);
+    if (!sent) await conversations.queueText(organizationId, conversationId, { body: "El catálogo ya está en esta conversación. Si no puedes abrirlo, dime y con gusto te lo reenvío." });
+  }
   if (step.type === "send_media")
     for (const item of step.items || []) {
       if (item.type === "document")
@@ -390,7 +408,16 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
         );
         return true;
       }
-      return false;
+      if (step.fallbackBody?.trim()) {
+        await conversations.queueText(organizationId, conversationId, { body: step.fallbackBody });
+        log("info", "Conversation scenario fallback replied", { scenario: scenario.key, step: step.id });
+      } else {
+        await conversations.queueText(organizationId, conversationId, { body: "Claro 😊, tómate tu tiempo para revisarlo. Cuando estés listo, responde a la pregunta anterior y con gusto continúo ayudándote." });
+        log("info", "Conversation scenario default fallback replied", { scenario: scenario.key, step: step.id });
+      }
+      // A running scenario owns unmatched messages as well. Letting generic
+      // catalog rules run here is what previously caused duplicate documents.
+      return true;
     }
     await run(organizationId, conversationId, scenario, match.nextStepId);
     log("info", "Conversation scenario advanced", {

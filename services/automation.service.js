@@ -41,6 +41,10 @@ const isShippingQuestion = (text) => {
 const isExplicitCatalogRequest = (text) => hasSimilarWord(text, ['catalogo', 'catalogue'])
   || normalize(text).includes('lista de productos')
   || normalize(text).includes('ver los productos');
+const isExplicitCatalogResend = (text) => {
+  const normalized = normalize(text);
+  return ['reenvia', 'reenviar', 'mandame de nuevo', 'mandamelo de nuevo', 'manda de nuevo', 'otra vez', 'nuevamente', 'no me llego', 'no puedo abrir', 'no abre'].some((phrase) => normalized.includes(phrase));
+};
 const isProductPriceQuestion = (text) => {
   if (isShippingQuestion(text) || isExplicitCatalogRequest(text)) return false;
   return hasSimilarWord(text, ['precio', 'precios', 'cuanto', 'costo', 'vale', 'sale']);
@@ -162,9 +166,12 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   const [conversation, intents] = await Promise.all([db.query('SELECT auto_reply_enabled FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]), exports.list(organizationId)]);
   if (!conversation.rows[0]?.auto_reply_enabled) return;
   const text = normalize(message.text?.body); if (!text) return;
-  if (await scenarios.processIncoming(organizationId, conversationId, text)) return;
-  const active = intents.filter((intent) => intent.isActive);
+  // Shipping is a global question: it may be answered without discarding the
+  // guided-sales state that was waiting for a different answer. Every other
+  // message is owned by the active scenario first.
   const shippingQuestion = isShippingQuestion(text);
+  if (!shippingQuestion && await scenarios.processIncoming(organizationId, conversationId, text)) return;
+  const active = intents.filter((intent) => intent.isActive);
   const productPriceQuestion = isProductPriceQuestion(text);
   let matches;
   let source;
@@ -203,8 +210,13 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   }
   const { intent } = selected[0];
   if (intent.action === 'send_catalog') {
-    const catalog = await db.query('SELECT media_id, filename, caption FROM catalog_documents WHERE organization_id=$1', [organizationId]);
-    if (catalog.rows[0]) await conversations.queueDocument(organizationId, conversationId, { mediaId: catalog.rows[0].media_id, filename: catalog.rows[0].filename || undefined, caption: catalog.rows[0].caption || undefined });
+    const alreadySent = await hasReceivedCatalog(organizationId, conversationId);
+    if (alreadySent && !isExplicitCatalogResend(text)) {
+      await conversations.queueText(organizationId, conversationId, { body: 'El catálogo ya está en esta conversación. Si no puedes abrirlo, dime y con gusto te lo reenvío.' });
+    } else {
+      const catalog = await db.query('SELECT media_id, filename, caption FROM catalog_documents WHERE organization_id=$1', [organizationId]);
+      if (catalog.rows[0]) await conversations.queueDocument(organizationId, conversationId, { mediaId: catalog.rows[0].media_id, filename: catalog.rows[0].filename || undefined, caption: catalog.rows[0].caption || undefined });
+    }
   }
   else if (intent.action === 'send_shipping_info') await sendShippingInfo(organizationId, conversationId, intent.responseBody);
   else await conversations.queueText(organizationId, conversationId, { body: intent.responseBody });
