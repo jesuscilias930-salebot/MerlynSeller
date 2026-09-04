@@ -189,7 +189,9 @@ exports.queueEntrepreneurPackages = async (organizationId, conversationId, input
   }
   const requestedIds = parsed.data.packageIds;
   const templates = await db.query(
-    'SELECT id, media_id, caption FROM entrepreneur_packages WHERE organization_id=$1 AND id = ANY($2::uuid[])',
+    `SELECT p.id, p.caption AS group_caption, COALESCE(json_agg(json_build_object('mediaId', image.media_id, 'caption', image.caption) ORDER BY image.position, image.created_at) FILTER (WHERE image.id IS NOT NULL), '[]'::json) AS images
+     FROM entrepreneur_packages p LEFT JOIN entrepreneur_package_images image ON image.package_id=p.id
+     WHERE p.organization_id=$1 AND p.id = ANY($2::uuid[]) GROUP BY p.id, p.caption`,
     [organizationId, requestedIds],
   );
   const byId = new Map(templates.rows.map((row) => [row.id, row]));
@@ -198,12 +200,12 @@ exports.queueEntrepreneurPackages = async (organizationId, conversationId, input
     error.status = 404;
     throw error;
   }
-  // Preserve the order selected in the UI; each image becomes its own queued
+  // Preserve collection and image order; every image becomes its own queued
   // WhatsApp message and is delivered by the existing outbound worker.
   const queued = [];
   for (const packageId of requestedIds) {
     const item = byId.get(packageId);
-    queued.push(await exports.queueExistingMedia(organizationId, conversationId, 'image', item.media_id, item.caption));
+    for (const image of item.images) queued.push(await exports.queueExistingMedia(organizationId, conversationId, 'image', image.mediaId, image.caption || item.group_caption));
   }
   return { queued };
 };
