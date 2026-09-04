@@ -16,6 +16,7 @@ router.get('/:id/messages', controller.messages);
 router.post('/:id/messages/:messageId/learn-intent', controller.learnIntent);
 router.post('/:id/read', controller.markRead);
 router.patch('/:id/automation', controller.setAutoReply);
+router.patch('/:id/scenarios', controller.setScenarioEnabled);
 router.get('/:id/document-options', controller.documentOptions);
 router.get('/:id/messages/:messageId/media', controller.media);
 router.post('/:id/messages/text', controller.sendText);

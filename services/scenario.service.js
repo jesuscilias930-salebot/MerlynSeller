@@ -15,6 +15,8 @@ const words = (value) =>
   normalize(value)
     .split(" ")
     .filter((word) => word.length > 1);
+const levenshtein = (left, right) => { const row = Array.from({ length: right.length + 1 }, (_, index) => index); for (let i = 1; i <= left.length; i += 1) { let previous = row[0]; row[0] = i; for (let j = 1; j <= right.length; j += 1) { const current = row[j]; row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (left[i - 1] === right[j - 1] ? 0 : 1)); previous = current; } } return row[right.length]; };
+const similar = (left, right) => left === right || (left.length >= 3 && right.length >= 3 && levenshtein(left, right) <= Math.max(1, Math.floor(Math.max(left.length, right.length) * .25)));
 const score = (text, examples) =>
   Math.max(
     0,
@@ -25,7 +27,7 @@ const score = (text, examples) =>
       const phraseWords = words(phrase);
       const textWords = words(text);
       return phraseWords.length
-        ? phraseWords.filter((word) => textWords.includes(word)).length /
+        ? phraseWords.filter((word) => textWords.some((candidate) => similar(word, candidate))).length /
             phraseWords.length
         : 0;
     }),
@@ -77,6 +79,9 @@ const scenarioSchema = z
   .object({
     name: z.string().trim().min(2).max(100),
     triggerExamples: z.array(z.string().trim().min(2).max(240)).min(1).max(30),
+    aiDescription: z.string().trim().min(10).max(700).optional().nullable(),
+    priority: z.number().int().min(0).max(1000).default(0),
+    canInterrupt: z.boolean().default(true),
     isActive: z.boolean().default(true),
     steps: z.array(stepSchema).min(1).max(60),
   })
@@ -135,7 +140,7 @@ const slug = (name) =>
 exports.list = async (organizationId) =>
   (
     await db.query(
-      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",steps,updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY created_at',
+      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY position ASC, created_at ASC',
       [organizationId],
     )
   ).rows.map(toRow);
@@ -146,14 +151,14 @@ exports.create = async (organizationId, input) => {
     const key = suffix ? `${base}_${suffix + 1}` : base;
     try {
       const result = await db.query(
-        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,steps,config) VALUES ($1,$2,$3,$4,$5,$6,\'{}\') RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",steps,updated_at AS "updatedAt"',
+        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,ai_description,priority,can_interrupt,position,steps,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$1),0),$9,\'{}\') RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,updated_at AS "updatedAt"',
         [
           organizationId,
           key,
           value.name,
           value.isActive,
           JSON.stringify(value.triggerExamples),
-          JSON.stringify(value.steps),
+          value.aiDescription || null, value.priority, value.canInterrupt, JSON.stringify(value.steps),
         ],
       );
       return toRow(result.rows[0]);
@@ -168,14 +173,14 @@ exports.create = async (organizationId, input) => {
 exports.update = async (organizationId, id, input) => {
   const value = parse(input);
   const result = await db.query(
-    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,steps=$6,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",steps,updated_at AS "updatedAt"',
+    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,updated_at AS "updatedAt"',
     [
       id,
       organizationId,
       value.name,
       value.isActive,
       JSON.stringify(value.triggerExamples),
-      JSON.stringify(value.steps),
+      value.aiDescription || null, value.priority, value.canInterrupt, JSON.stringify(value.steps),
     ],
   );
   if (!result.rows[0]) {
@@ -184,6 +189,20 @@ exports.update = async (organizationId, id, input) => {
     throw error;
   }
   return toRow(result.rows[0]);
+};
+exports.reorder = async (organizationId, input) => {
+  const ids = z.array(z.string().uuid()).min(1).max(100).safeParse(input?.scenarioIds);
+  if (!ids.success) { const error = new Error('scenarioIds must include every scenario'); error.status = 400; throw error; }
+  await db.transaction(async (client) => {
+    const existing = await client.query('SELECT id FROM automation_scenarios WHERE organization_id=$1 FOR UPDATE', [organizationId]);
+    const expected = new Set(existing.rows.map((row) => row.id));
+    const received = new Set(ids.data);
+    if (expected.size !== received.size || [...expected].some((id) => !received.has(id))) {
+      const error = new Error('The scenario order must include every scenario exactly once'); error.status = 400; throw error;
+    }
+    await client.query(`UPDATE automation_scenarios AS scenario SET position=ordered.position - 1 FROM unnest($2::uuid[]) WITH ORDINALITY AS ordered(id,position) WHERE scenario.organization_id=$1 AND scenario.id=ordered.id`, [organizationId, ids.data]);
+  });
+  return { scenarioIds: ids.data };
 };
 exports.remove = async (organizationId, id) =>
   db.transaction(async (client) => {
@@ -251,6 +270,15 @@ const complete = (organizationId, conversationId) =>
     [organizationId, conversationId],
   );
 const byId = (scenario, id) => scenario.steps.find((step) => step.id === id);
+const aiMatchScenario = async (text, scenarios) => {
+  if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_AUTOMATION_MODEL || !scenarios.length) return null;
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: process.env.OPENAI_AUTOMATION_MODEL, store: false, instructions: 'Classify the Spanish customer message into at most one scenario. Handle common typos. Return no key if ambiguous. Select only when the scenario clearly matches the meaning.', input: JSON.stringify({ message: text, scenarios: scenarios.map((scenario) => ({ key: scenario.key, name: scenario.name, description: scenario.aiDescription || '', examples: scenario.triggerExamples })) }), text: { format: { type: 'json_schema', name: 'scenario_match', strict: true, schema: { type: 'object', properties: { key: { type: ['string', 'null'] }, confidence: { type: 'number' } }, required: ['key', 'confidence'], additionalProperties: false } } } }), signal: AbortSignal.timeout(8000) });
+    const body = await response.json(); if (!response.ok || body.error) return null;
+    const parsed = JSON.parse(body.output_text || '{}');
+    return parsed.confidence >= .82 ? scenarios.find((scenario) => scenario.key === parsed.key) || null : null;
+  } catch (error) { log('warn', 'Scenario AI classification failed', { errorType: error.name }); return null; }
+};
 
 const run = async (
   organizationId,
@@ -322,19 +350,32 @@ const run = async (
 exports.processIncoming = async (organizationId, conversationId, incoming) => {
   const text = normalize(incoming);
   if (!text) return false;
-  const [states, scenarios] = await Promise.all([
+  const [states, scenarios, conversation] = await Promise.all([
     db.query(
       "SELECT scenario_key,step FROM conversation_scenario_states WHERE organization_id=$1 AND conversation_id=$2 AND completed_at IS NULL",
       [organizationId, conversationId],
     ),
     exports.list(organizationId),
+    db.query('SELECT scenario_enabled FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]),
   ]);
+  if (conversation.rows[0]?.scenario_enabled === false) return false;
   const active = scenarios.filter((scenario) => scenario.isActive);
   const state = states.rows[0];
+  const rankedStarts = active.map((scenario) => ({ scenario, value: score(text, scenario.triggerExamples) })).sort((a, b) => b.value - a.value || a.scenario.position - b.scenario.position || b.scenario.priority - a.scenario.priority);
+  let newStart = rankedStarts[0]?.value >= .72 ? rankedStarts[0].scenario : null;
+  if (!newStart) newStart = await aiMatchScenario(text, active);
   if (state) {
     const scenario = active.find((item) => item.key === state.scenario_key);
     const step = scenario && byId(scenario, state.step);
     if (!scenario || !step || step.type !== "wait_reply") return false;
+    // A clearly recognized, interruptible scenario replaces the current wait.
+    // Weak matches never cancel a lead's ongoing guided conversation.
+    if (newStart && newStart.key !== scenario.key && newStart.canInterrupt) {
+      await complete(organizationId, conversationId);
+      await run(organizationId, conversationId, newStart, newStart.steps[0].id);
+      log('info', 'Conversation scenario replaced', { from: scenario.key, to: newStart.key });
+      return true;
+    }
     const ranked = (step.branches || [])
       .map((branch) => ({ branch, value: score(text, branch.examples) }))
       .sort((a, b) => b.value - a.value);
@@ -359,13 +400,7 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
     });
     return true;
   }
-  const ranked = active
-    .map((scenario) => ({
-      scenario,
-      value: score(text, scenario.triggerExamples),
-    }))
-    .sort((a, b) => b.value - a.value);
-  const match = ranked[0]?.value >= 0.6 ? ranked[0].scenario : null;
+  const match = newStart;
   if (!match) return false;
   await run(organizationId, conversationId, match, match.steps[0].id);
   log("info", "Conversation scenario started", { scenario: match.key });

@@ -7,6 +7,7 @@ router.use(requireUser, requireRole('owner', 'admin'));
 router.get('/', controller.list);
 router.post('/evidence/upload', require('express').raw({ type: isScenarioFile, limit: '25mb' }), controller.uploadEvidence);
 router.post('/', controller.create);
+router.put('/order', controller.reorder);
 router.put('/:id', controller.update);
 router.delete('/:id', controller.remove);
 module.exports = router;

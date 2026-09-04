@@ -2,6 +2,7 @@ const { z } = require('zod');
 const db = require('../lib/db');
 const conversations = require('./conversation.service');
 const scenarios = require('./scenario.service');
+const leads = require('./lead.service');
 
 const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 const words = (value) => normalize(value).split(' ').filter((word) => word.length > 1);
@@ -194,7 +195,12 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   const selected = ranked.slice(0, 1);
   log('info', 'Automation intent evaluated', { source, shippingQuestion, productPriceQuestion, matchedIntentCount: selected.length, selectedIntent: selected[0]?.intent.key || null });
   const event = await db.query('INSERT INTO automation_events (organization_id, conversation_id, inbound_provider_message_id, detected_intents, source, confidence, outcome) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (inbound_provider_message_id) DO NOTHING RETURNING id', [organizationId, conversationId, message.id, JSON.stringify(selected.map((match) => match.intent.key)), source, selected[0]?.confidence || null, selected.length ? 'queued' : 'no_match']);
-  if (!event.rows[0] || !selected.length) return;
+  if (!event.rows[0]) return;
+  if (!selected.length) {
+    const moved = await leads.moveToAttention(organizationId, conversationId);
+    log('info', 'No automatic answer available', { conversationId, movedToAttention: moved });
+    return;
+  }
   const { intent } = selected[0];
   if (intent.action === 'send_catalog') {
     const catalog = await db.query('SELECT media_id, filename, caption FROM catalog_documents WHERE organization_id=$1', [organizationId]);

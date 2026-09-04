@@ -40,6 +40,7 @@ exports.board = async (organizationId, userId) => {
       c.contact_id AS "contactId",
       c.lead_column_id,
       c.auto_reply_enabled AS "autoReplyEnabled",
+      c.scenario_enabled AS "scenarioEnabled",
       c.status,
       c.updated_at,
       ct.phone_number,
@@ -172,4 +173,22 @@ exports.move = async (organizationId, conversationId, input) => {
   });
   await realtime.publish(organizationId, 'lead.moved', result.id);
   return result;
+};
+
+// An unmatched customer message should be visible to a human. The column is
+// intentionally looked up by name so each organization retains control of its
+// own pipeline IDs and can still rename/reorder all other columns freely.
+exports.moveToAttention = async (organizationId, conversationId) => {
+  const columns = await db.query(
+    'SELECT id, name FROM lead_columns WHERE organization_id=$1',
+    [organizationId],
+  );
+  const target = columns.rows.find((column) => String(column.name || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase() === 'requiere atencion');
+  if (!target) return false;
+  await exports.move(organizationId, conversationId, { columnId: target.id });
+  return true;
 };

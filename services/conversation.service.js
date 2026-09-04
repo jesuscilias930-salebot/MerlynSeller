@@ -8,6 +8,7 @@ const phone = z.string().trim().transform((value) => value.replace(/^\+/, '')).r
 const createSchema = z.object({ phoneNumber: phone, name: z.string().trim().max(120).optional() });
 const textSchema = z.object({ body: z.string().trim().min(1).max(4096), replyToMessageId: z.string().uuid().optional() });
 const autoReplySchema = z.object({ enabled: z.boolean() });
+const scenarioSchema = z.object({ enabled: z.boolean() });
 const documentSchema = z.object({
   mediaId: z.string().trim().min(1).max(256),
   filename: z.string().trim().min(1).max(240).optional(),
@@ -21,7 +22,7 @@ const validation = (schema, value) => {
 };
 
 exports.list = async (organizationId, userId) => (await db.query(`
-  SELECT c.id, c.contact_id AS "contactId", c.status, c.updated_at, c.auto_reply_enabled AS "autoReplyEnabled", c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
+  SELECT c.id, c.contact_id AS "contactId", c.status, c.updated_at, c.auto_reply_enabled AS "autoReplyEnabled", c.scenario_enabled AS "scenarioEnabled", c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
     latest.body AS last_message,
     latest.direction AS "lastDirection",
     (c.status = 'open' AND latest.direction = 'inbound') AS "needsResponse",
@@ -88,6 +89,15 @@ exports.setAutoReply = async (organizationId, conversationId, input) => {
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   return result.rows[0];
 };
+exports.setScenarioEnabled = async (organizationId, conversationId, input) => {
+  const data = validation(scenarioSchema, input);
+  const result = await db.query('UPDATE conversations SET scenario_enabled=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING scenario_enabled AS "scenarioEnabled"', [conversationId, organizationId, data.enabled]);
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  if (!data.enabled) await completeScenario(organizationId, conversationId);
+  return result.rows[0];
+};
+const completeScenario = (organizationId, conversationId) => db.query('UPDATE conversation_scenario_states SET completed_at=now(),updated_at=now() WHERE organization_id=$1 AND conversation_id=$2 AND completed_at IS NULL', [organizationId, conversationId]);
+exports.disableScenariosForHuman = (organizationId, conversationId) => exports.setScenarioEnabled(organizationId, conversationId, { enabled: false });
 // Test-reset helper: the contact is intentionally kept so its visible name and
 // phone number remain available, while messages and scenario state are removed
 // through the conversation foreign-key cascades.

@@ -38,6 +38,7 @@ exports.markRead = async (req, res, next) => {
 exports.setAutoReply = async (req, res, next) => {
     try { return res.json(await conversations.setAutoReply(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); }
 };
+exports.setScenarioEnabled = async (req, res, next) => { try { return res.json(await conversations.setScenarioEnabled(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); } };
 exports.remove = async (req, res, next) => {
     try { return res.json(await conversations.remove(req.auth.organizationId, req.params.id)); } catch (error) { return handle(error, res, next); }
 };
@@ -55,6 +56,7 @@ exports.create = async (req, res, next) => {
 
 exports.sendText = async (req, res, next) => {
      try { 
+        await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id);
         return res.status(202).json(await conversations.queueText(req.auth.organizationId, req.params.id, req.body));
      } catch (error) { 
         return handle(error, res, next); 
@@ -63,6 +65,7 @@ exports.sendText = async (req, res, next) => {
 
 exports.sendDocument = async (req, res, next) => {
     try {
+        await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id);
         return res.status(202).json(await conversations.queueDocument(req.auth.organizationId, req.params.id, req.body));
     } catch (error) {
         return handle(error, res, next);
@@ -71,16 +74,18 @@ exports.sendDocument = async (req, res, next) => {
 
 exports.sendEntrepreneurPackages = async (req, res, next) => {
     try {
+        await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id);
         return res.status(202).json(await conversations.queueEntrepreneurPackages(req.auth.organizationId, req.params.id, req.body));
     } catch (error) { return handle(error, res, next); }
 };
 exports.sendSavedSticker = async (req, res, next) => {
-  try { return res.status(202).json(await conversations.queueSavedSticker(req.auth.organizationId, req.params.id, req.body.stickerId)); }
+  try { await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id); return res.status(202).json(await conversations.queueSavedSticker(req.auth.organizationId, req.params.id, req.body.stickerId)); }
   catch (error) { return handle(error, res, next); }
 };
 
 exports.sendAudio = async (req, res, next) => {
     try {
+        await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id);
         const contentType = (req.get('content-type') || '').split(';')[0];
         const filename = decodeURIComponent(req.get('x-upload-filename') || 'audio');
         if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
@@ -98,6 +103,7 @@ exports.sendAudio = async (req, res, next) => {
 
 const sendMedia = (type) => async (req, res, next) => {
     try {
+        await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id);
         const contentType = (req.get('content-type') || '').split(';')[0];
         const filename = decodeURIComponent(req.get('x-upload-filename') || type);
         if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: `${type} file is required` });
@@ -114,6 +120,7 @@ exports.sendVideo = sendMedia('video');
 
 exports.uploadDocument = async (req, res, next) => {
     try {
+        await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id);
         const contentType = (req.get('content-type') || '').split(';')[0];
         const filename = decodeURIComponent(req.get('x-upload-filename') || 'document.pdf');
         if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'PDF file is required' });
