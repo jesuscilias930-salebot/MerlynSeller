@@ -442,7 +442,7 @@ const classifyUnmatchedReply = async (text, scenario, step) => {
   }
 };
 const sendClarification = async (organizationId, conversationId, step) => conversations.queueText(organizationId, conversationId, {
-  body: step.fallbackBody?.trim() || "Claro 😊, tómate tu tiempo para revisarlo. Cuando estés listo, responde a la pregunta anterior y con gusto continúo ayudándote.",
+  body: step.fallbackBody.trim(),
 });
 
 const run = async (
@@ -555,11 +555,6 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
       log("info", "Conversation scenario advanced", { scenario: scenario.key, step: step.id, branch: match.id });
       return { handled: true, requiresHuman: false };
     }
-    if (step.fallbackStepId) {
-      await run(organizationId, conversationId, scenario, step.fallbackStepId);
-      return { handled: true, requiresHuman: false };
-    }
-
     const decision = await classifyUnmatchedReply(text, scenario, step);
     const aiBranch = (step.branches || []).find((branch) => branch.id === decision.branchId);
     if (decision.decision === "continue_branch" && decision.confidence >= 0.82 && aiBranch) {
@@ -568,9 +563,18 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
       return { handled: true, requiresHuman: false };
     }
     if (decision.decision === "clarify" && decision.confidence >= 0.7) {
-      await sendClarification(organizationId, conversationId, step);
-      log("info", "Conversation scenario clarification sent", { scenario: scenario.key, step: step.id, confidence: decision.confidence });
-      return { handled: true, requiresHuman: false };
+      if (step.fallbackStepId) {
+        await run(organizationId, conversationId, scenario, step.fallbackStepId);
+        log("info", "Conversation scenario clarification advanced through configured fallback", { scenario: scenario.key, step: step.id, confidence: decision.confidence });
+        return { handled: true, requiresHuman: false };
+      }
+      if (step.fallbackBody?.trim()) {
+        await sendClarification(organizationId, conversationId, step);
+        log("info", "Conversation scenario clarification sent", { scenario: scenario.key, step: step.id, confidence: decision.confidence });
+        return { handled: true, requiresHuman: false };
+      }
+      log("info", "Scenario clarification escalated to human attention: no configured fallback", { scenario: scenario.key, step: step.id, confidence: decision.confidence });
+      return { handled: false, requiresHuman: true };
     }
     log("info", "Conversation scenario requires human attention", { scenario: scenario.key, step: step.id, confidence: decision.confidence || 0 });
     return { handled: false, requiresHuman: true };

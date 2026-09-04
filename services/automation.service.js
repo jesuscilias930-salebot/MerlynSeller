@@ -49,6 +49,11 @@ const isProductPriceQuestion = (text) => {
   if (isShippingQuestion(text) || isExplicitCatalogRequest(text)) return false;
   return hasSimilarWord(text, ['precio', 'precios', 'cuanto', 'costo', 'vale', 'sale']);
 };
+const isSpecificQuoteRequest = (text) => {
+  const normalized = normalize(text);
+  return /\b\d+\s*(pares?|docenas?|piezas?|unidades?|calcetas?)\b/.test(normalized)
+    || (/\b(docena|docenas)\b/.test(normalized) && /\b(calcetas?|pares?|piezas?)\b/.test(normalized));
+};
 
 const intentSchema = z.object({
   key: z.string().trim().min(2).max(50).regex(/^[a-z0-9_]+$/),
@@ -170,25 +175,34 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   // guided-sales state that was waiting for a different answer. Every other
   // message is owned by the active scenario first.
   const shippingQuestion = isShippingQuestion(text);
-  if (!shippingQuestion) {
-    const scenarioResult = await scenarios.processIncoming(organizationId, conversationId, text);
-    if (scenarioResult.handled) return;
-    if (scenarioResult.requiresHuman) {
+  const active = intents.filter((intent) => intent.isActive);
+  if (shippingQuestion) {
+    const configured = active.find((intent) => intent.action === 'send_shipping_info');
+    if (!configured) {
       const moved = await leads.moveToAttention(organizationId, conversationId);
-      log('info', 'Scenario escalated to human attention', { conversationId, movedToAttention: moved });
+      log('info', 'Shipping question escalated to human attention: no active shipping automation', { conversationId, movedToAttention: moved });
       return;
     }
+    await sendShippingInfo(organizationId, conversationId, configured.responseBody);
+    log('info', 'Global shipping response sent', { conversationId, configured: true });
+    return;
   }
-  const active = intents.filter((intent) => intent.isActive);
+  if (isSpecificQuoteRequest(text)) {
+    const moved = await leads.moveToAttention(organizationId, conversationId);
+    log('info', 'Specific quote request escalated to human attention', { conversationId, movedToAttention: moved });
+    return;
+  }
+  const scenarioResult = await scenarios.processIncoming(organizationId, conversationId, text);
+  if (scenarioResult.handled) return;
+  if (scenarioResult.requiresHuman) {
+    const moved = await leads.moveToAttention(organizationId, conversationId);
+    log('info', 'Scenario escalated to human attention', { conversationId, movedToAttention: moved });
+    return;
+  }
   const productPriceQuestion = isProductPriceQuestion(text);
   let matches;
   let source;
-  if (shippingQuestion) {
-    // Shipping is an explicit business topic. It must never fall through to a
-    // generic catalog response merely because the message also says "precio".
-    matches = active.filter((intent) => intent.action === 'send_shipping_info').map((intent) => ({ intent, confidence: 1 }));
-    source = matches.length ? 'shipping_guard' : 'shipping_unconfigured';
-  } else {
+  {
     matches = active.map((intent) => ({ intent, confidence: ruleScore(text, intent.examples || []) })).filter((match) => match.confidence >= 0.72);
     source = 'rules';
     if (!matches.length) { matches = await aiDetect(text, active); source = matches.length ? 'ai' : 'none'; }
