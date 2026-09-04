@@ -170,7 +170,15 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   // guided-sales state that was waiting for a different answer. Every other
   // message is owned by the active scenario first.
   const shippingQuestion = isShippingQuestion(text);
-  if (!shippingQuestion && await scenarios.processIncoming(organizationId, conversationId, text)) return;
+  if (!shippingQuestion) {
+    const scenarioResult = await scenarios.processIncoming(organizationId, conversationId, text);
+    if (scenarioResult.handled) return;
+    if (scenarioResult.requiresHuman) {
+      const moved = await leads.moveToAttention(organizationId, conversationId);
+      log('info', 'Scenario escalated to human attention', { conversationId, movedToAttention: moved });
+      return;
+    }
+  }
   const active = intents.filter((intent) => intent.isActive);
   const productPriceQuestion = isProductPriceQuestion(text);
   let matches;

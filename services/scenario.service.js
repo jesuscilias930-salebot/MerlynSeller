@@ -15,8 +15,29 @@ const words = (value) =>
   normalize(value)
     .split(" ")
     .filter((word) => word.length > 1);
-const levenshtein = (left, right) => { const row = Array.from({ length: right.length + 1 }, (_, index) => index); for (let i = 1; i <= left.length; i += 1) { let previous = row[0]; row[0] = i; for (let j = 1; j <= right.length; j += 1) { const current = row[j]; row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (left[i - 1] === right[j - 1] ? 0 : 1)); previous = current; } } return row[right.length]; };
-const similar = (left, right) => left === right || (left.length >= 3 && right.length >= 3 && levenshtein(left, right) <= Math.max(1, Math.floor(Math.max(left.length, right.length) * .25)));
+const levenshtein = (left, right) => {
+  const row = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    let previous = row[0];
+    row[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const current = row[j];
+      row[j] = Math.min(
+        row[j] + 1,
+        row[j - 1] + 1,
+        previous + (left[i - 1] === right[j - 1] ? 0 : 1),
+      );
+      previous = current;
+    }
+  }
+  return row[right.length];
+};
+const similar = (left, right) =>
+  left === right ||
+  (left.length >= 3 &&
+    right.length >= 3 &&
+    levenshtein(left, right) <=
+      Math.max(1, Math.floor(Math.max(left.length, right.length) * 0.25)));
 const score = (text, examples) =>
   Math.max(
     0,
@@ -27,8 +48,9 @@ const score = (text, examples) =>
       const phraseWords = words(phrase);
       const textWords = words(text);
       return phraseWords.length
-        ? phraseWords.filter((word) => textWords.some((candidate) => similar(word, candidate))).length /
-            phraseWords.length
+        ? phraseWords.filter((word) =>
+            textWords.some((candidate) => similar(word, candidate)),
+          ).length / phraseWords.length
         : 0;
     }),
   );
@@ -146,6 +168,7 @@ exports.list = async (organizationId) =>
       [organizationId],
     )
   ).rows.map(toRow);
+
 exports.create = async (organizationId, input) => {
   const value = parse(input);
   const base = slug(value.name);
@@ -160,7 +183,10 @@ exports.create = async (organizationId, input) => {
           value.name,
           value.isActive,
           JSON.stringify(value.triggerExamples),
-          value.aiDescription || null, value.priority, value.canInterrupt, JSON.stringify(value.steps),
+          value.aiDescription || null,
+          value.priority,
+          value.canInterrupt,
+          JSON.stringify(value.steps),
         ],
       );
       return toRow(result.rows[0]);
@@ -182,7 +208,10 @@ exports.update = async (organizationId, id, input) => {
       value.name,
       value.isActive,
       JSON.stringify(value.triggerExamples),
-      value.aiDescription || null, value.priority, value.canInterrupt, JSON.stringify(value.steps),
+      value.aiDescription || null,
+      value.priority,
+      value.canInterrupt,
+      JSON.stringify(value.steps),
     ],
   );
   if (!result.rows[0]) {
@@ -193,16 +222,37 @@ exports.update = async (organizationId, id, input) => {
   return toRow(result.rows[0]);
 };
 exports.reorder = async (organizationId, input) => {
-  const ids = z.array(z.string().uuid()).min(1).max(100).safeParse(input?.scenarioIds);
-  if (!ids.success) { const error = new Error('scenarioIds must include every scenario'); error.status = 400; throw error; }
+  const ids = z
+    .array(z.string().uuid())
+    .min(1)
+    .max(100)
+    .safeParse(input?.scenarioIds);
+  if (!ids.success) {
+    const error = new Error("scenarioIds must include every scenario");
+    error.status = 400;
+    throw error;
+  }
   await db.transaction(async (client) => {
-    const existing = await client.query('SELECT id FROM automation_scenarios WHERE organization_id=$1 FOR UPDATE', [organizationId]);
+    const existing = await client.query(
+      "SELECT id FROM automation_scenarios WHERE organization_id=$1 FOR UPDATE",
+      [organizationId],
+    );
     const expected = new Set(existing.rows.map((row) => row.id));
     const received = new Set(ids.data);
-    if (expected.size !== received.size || [...expected].some((id) => !received.has(id))) {
-      const error = new Error('The scenario order must include every scenario exactly once'); error.status = 400; throw error;
+    if (
+      expected.size !== received.size ||
+      [...expected].some((id) => !received.has(id))
+    ) {
+      const error = new Error(
+        "The scenario order must include every scenario exactly once",
+      );
+      error.status = 400;
+      throw error;
     }
-    await client.query(`UPDATE automation_scenarios AS scenario SET position=ordered.position - 1 FROM unnest($2::uuid[]) WITH ORDINALITY AS ordered(id,position) WHERE scenario.organization_id=$1 AND scenario.id=ordered.id`, [organizationId, ids.data]);
+    await client.query(
+      `UPDATE automation_scenarios AS scenario SET position=ordered.position - 1 FROM unnest($2::uuid[]) WITH ORDINALITY AS ordered(id,position) WHERE scenario.organization_id=$1 AND scenario.id=ordered.id`,
+      [organizationId, ids.data],
+    );
   });
   return { scenarioIds: ids.data };
 };
@@ -238,7 +288,11 @@ exports.uploadEvidence = async (input) => {
   return messageService.uploadMedia(input);
 };
 
-const hasSentCatalog = async (organizationId, conversationId) => Boolean((await db.query(`
+const hasSentCatalog = async (organizationId, conversationId) =>
+  Boolean(
+    (
+      await db.query(
+        `
   SELECT EXISTS(
     SELECT 1 FROM messages message
     JOIN catalog_documents catalog
@@ -249,8 +303,17 @@ const hasSentCatalog = async (organizationId, conversationId) => Boolean((await 
       AND message.direction='outbound'
       AND message.type='document'
   ) AS sent
-`, [organizationId, conversationId])).rows[0]?.sent);
-const queueCatalog = async (organizationId, conversationId, caption, force = false) => {
+`,
+        [organizationId, conversationId],
+      )
+    ).rows[0]?.sent,
+  );
+const queueCatalog = async (
+  organizationId,
+  conversationId,
+  caption,
+  force = false,
+) => {
   const document = (
     await db.query(
       "SELECT media_id,filename FROM catalog_documents WHERE organization_id=$1",
@@ -262,7 +325,8 @@ const queueCatalog = async (organizationId, conversationId, caption, force = fal
     error.status = 400;
     throw error;
   }
-  if (!force && await hasSentCatalog(organizationId, conversationId)) return false;
+  if (!force && (await hasSentCatalog(organizationId, conversationId)))
+    return false;
   await conversations.queueDocument(organizationId, conversationId, {
     mediaId: document.media_id,
     filename: document.filename || undefined,
@@ -287,14 +351,99 @@ const complete = (organizationId, conversationId) =>
   );
 const byId = (scenario, id) => scenario.steps.find((step) => step.id === id);
 const aiMatchScenario = async (text, scenarios) => {
-  if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_AUTOMATION_MODEL || !scenarios.length) return null;
+  if (
+    !process.env.OPENAI_API_KEY ||
+    !process.env.OPENAI_AUTOMATION_MODEL ||
+    !scenarios.length
+  )
+    return null;
   try {
-    const response = await fetch('https://api.openai.com/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: process.env.OPENAI_AUTOMATION_MODEL, store: false, instructions: 'Classify the Spanish customer message into at most one scenario. Handle common typos. Return no key if ambiguous. Select only when the scenario clearly matches the meaning.', input: JSON.stringify({ message: text, scenarios: scenarios.map((scenario) => ({ key: scenario.key, name: scenario.name, description: scenario.aiDescription || '', examples: scenario.triggerExamples })) }), text: { format: { type: 'json_schema', name: 'scenario_match', strict: true, schema: { type: 'object', properties: { key: { type: ['string', 'null'] }, confidence: { type: 'number' } }, required: ['key', 'confidence'], additionalProperties: false } } } }), signal: AbortSignal.timeout(8000) });
-    const body = await response.json(); if (!response.ok || body.error) return null;
-    const parsed = JSON.parse(body.output_text || '{}');
-    return parsed.confidence >= .82 ? scenarios.find((scenario) => scenario.key === parsed.key) || null : null;
-  } catch (error) { log('warn', 'Scenario AI classification failed', { errorType: error.name }); return null; }
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_AUTOMATION_MODEL,
+        store: false,
+        instructions:
+          "Classify the Spanish customer message into at most one scenario. Handle common typos. Return no key if ambiguous. Select only when the scenario clearly matches the meaning.",
+        input: JSON.stringify({
+          message: text,
+          scenarios: scenarios.map((scenario) => ({
+            key: scenario.key,
+            name: scenario.name,
+            description: scenario.aiDescription || "",
+            examples: scenario.triggerExamples,
+          })),
+        }),
+        text: {
+          format: {
+            type: "json_schema",
+            name: "scenario_match",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                key: { type: ["string", "null"] },
+                confidence: { type: "number" },
+              },
+              required: ["key", "confidence"],
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const body = await response.json();
+    if (!response.ok || body.error) return null;
+    const parsed = JSON.parse(body.output_text || "{}");
+    return parsed.confidence >= 0.82
+      ? scenarios.find((scenario) => scenario.key === parsed.key) || null
+      : null;
+  } catch (error) {
+    log("warn", "Scenario AI classification failed", { errorType: error.name });
+    return null;
+  }
 };
+
+const localClarificationSignal = (text) => {
+  const normalized = normalize(text);
+  return ["checo", "reviso", "revisando", "viendo", "leo", "leyendo", "momento", "ahorita", "mas tarde", "despues"].some((phrase) => normalized.includes(phrase));
+};
+const classifyUnmatchedReply = async (text, scenario, step) => {
+  const branches = step.branches || [];
+  if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_AUTOMATION_MODEL) {
+    return localClarificationSignal(text) ? { decision: "clarify", confidence: 0.9 } : { decision: "requires_human", confidence: 0 };
+  }
+  try {
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: process.env.OPENAI_AUTOMATION_MODEL,
+        store: false,
+        instructions: "You are a cautious Spanish WhatsApp sales-flow router. Decide only one action for the customer reply in the active scenario. Use continue_branch only when the reply clearly belongs to one listed branch. Use clarify when the customer is merely reviewing, asking for time, or needs a brief contextual clarification. Use requires_human for a specific quote, quantity/product request not covered by a branch, unrelated request, ambiguity, or low confidence. Never invent an answer, never choose a branch by keyword alone, and do not send a catalog.",
+        input: JSON.stringify({ customerMessage: text, activeScenario: { name: scenario.name, description: scenario.aiDescription || "" }, waitingStep: { label: step.label, fallbackMessage: step.fallbackBody || "" }, branches: branches.map((branch) => ({ id: branch.id, name: branch.name, examples: branch.examples })) }),
+        text: { format: { type: "json_schema", name: "scenario_reply_decision", strict: true, schema: { type: "object", properties: { decision: { type: "string", enum: ["continue_branch", "clarify", "requires_human"] }, branchId: { type: ["string", "null"] }, confidence: { type: "number" } }, required: ["decision", "branchId", "confidence"], additionalProperties: false } } },
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const body = await response.json();
+    if (!response.ok || body.error) return { decision: "requires_human", confidence: 0 };
+    const parsed = JSON.parse(body.output_text || "{}");
+    if (!["continue_branch", "clarify", "requires_human"].includes(parsed.decision)) return { decision: "requires_human", confidence: 0 };
+    return parsed;
+  } catch (error) {
+    log("warn", "Scenario reply AI classification failed", { errorType: error.name });
+    return localClarificationSignal(text) ? { decision: "clarify", confidence: 0.9 } : { decision: "requires_human", confidence: 0 };
+  }
+};
+const sendClarification = async (organizationId, conversationId, step) => conversations.queueText(organizationId, conversationId, {
+  body: step.fallbackBody?.trim() || "Claro 😊, tómate tu tiempo para revisarlo. Cuando estés listo, responde a la pregunta anterior y con gusto continúo ayudándote.",
+});
 
 const run = async (
   organizationId,
@@ -329,8 +478,16 @@ const run = async (
       body: step.body,
     });
   if (step.type === "send_catalog") {
-    const sent = await queueCatalog(organizationId, conversationId, step.caption, step.resendCatalog === true);
-    if (!sent) await conversations.queueText(organizationId, conversationId, { body: "El catálogo ya está en esta conversación. Si no puedes abrirlo, dime y con gusto te lo reenvío." });
+    const sent = await queueCatalog(
+      organizationId,
+      conversationId,
+      step.caption,
+      step.resendCatalog === true,
+    );
+    if (!sent)
+      await conversations.queueText(organizationId, conversationId, {
+        body: "El catálogo ya está en esta conversación. Si no puedes abrirlo, dime y con gusto te lo reenvío.",
+      });
   }
   if (step.type === "send_media")
     for (const item of step.items || []) {
@@ -367,69 +524,60 @@ const run = async (
 
 exports.processIncoming = async (organizationId, conversationId, incoming) => {
   const text = normalize(incoming);
-  if (!text) return false;
+  if (!text) return { handled: false, requiresHuman: false };
   const [states, scenarios, conversation] = await Promise.all([
-    db.query(
-      "SELECT scenario_key,step FROM conversation_scenario_states WHERE organization_id=$1 AND conversation_id=$2 AND completed_at IS NULL",
-      [organizationId, conversationId],
-    ),
+    db.query("SELECT scenario_key,step FROM conversation_scenario_states WHERE organization_id=$1 AND conversation_id=$2 AND completed_at IS NULL", [organizationId, conversationId]),
     exports.list(organizationId),
-    db.query('SELECT scenario_enabled FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]),
+    db.query("SELECT scenario_enabled FROM conversations WHERE id=$1 AND organization_id=$2", [conversationId, organizationId]),
   ]);
-  if (conversation.rows[0]?.scenario_enabled === false) return false;
+  if (conversation.rows[0]?.scenario_enabled === false) return { handled: false, requiresHuman: false };
   const active = scenarios.filter((scenario) => scenario.isActive);
   const state = states.rows[0];
   const rankedStarts = active.map((scenario) => ({ scenario, value: score(text, scenario.triggerExamples) })).sort((a, b) => b.value - a.value || a.scenario.position - b.scenario.position || b.scenario.priority - a.scenario.priority);
-  let newStart = rankedStarts[0]?.value >= .72 ? rankedStarts[0].scenario : null;
+  let newStart = rankedStarts[0]?.value >= 0.72 ? rankedStarts[0].scenario : null;
   if (!newStart) newStart = await aiMatchScenario(text, active);
+
   if (state) {
     const scenario = active.find((item) => item.key === state.scenario_key);
     const step = scenario && byId(scenario, state.step);
-    if (!scenario || !step || step.type !== "wait_reply") return false;
-    // A clearly recognized, interruptible scenario replaces the current wait.
-    // Weak matches never cancel a lead's ongoing guided conversation.
+    if (!scenario || !step || step.type !== "wait_reply") return { handled: false, requiresHuman: false };
     if (newStart && newStart.key !== scenario.key && newStart.canInterrupt) {
       await complete(organizationId, conversationId);
       await run(organizationId, conversationId, newStart, newStart.steps[0].id);
-      log('info', 'Conversation scenario replaced', { from: scenario.key, to: newStart.key });
-      return true;
+      log("info", "Conversation scenario replaced", { from: scenario.key, to: newStart.key });
+      return { handled: true, requiresHuman: false };
     }
-    const ranked = (step.branches || [])
-      .map((branch) => ({ branch, value: score(text, branch.examples) }))
-      .sort((a, b) => b.value - a.value);
+
+    const ranked = (step.branches || []).map((branch) => ({ branch, value: score(text, branch.examples) })).sort((a, b) => b.value - a.value);
     const match = ranked[0]?.value >= 0.6 ? ranked[0].branch : null;
-    if (!match) {
-      if (step.fallbackStepId) {
-        await run(
-          organizationId,
-          conversationId,
-          scenario,
-          step.fallbackStepId,
-        );
-        return true;
-      }
-      if (step.fallbackBody?.trim()) {
-        await conversations.queueText(organizationId, conversationId, { body: step.fallbackBody });
-        log("info", "Conversation scenario fallback replied", { scenario: scenario.key, step: step.id });
-      } else {
-        await conversations.queueText(organizationId, conversationId, { body: "Claro 😊, tómate tu tiempo para revisarlo. Cuando estés listo, responde a la pregunta anterior y con gusto continúo ayudándote." });
-        log("info", "Conversation scenario default fallback replied", { scenario: scenario.key, step: step.id });
-      }
-      // A running scenario owns unmatched messages as well. Letting generic
-      // catalog rules run here is what previously caused duplicate documents.
-      return true;
+    if (match) {
+      await run(organizationId, conversationId, scenario, match.nextStepId);
+      log("info", "Conversation scenario advanced", { scenario: scenario.key, step: step.id, branch: match.id });
+      return { handled: true, requiresHuman: false };
     }
-    await run(organizationId, conversationId, scenario, match.nextStepId);
-    log("info", "Conversation scenario advanced", {
-      scenario: scenario.key,
-      step: step.id,
-      branch: match.id,
-    });
-    return true;
+    if (step.fallbackStepId) {
+      await run(organizationId, conversationId, scenario, step.fallbackStepId);
+      return { handled: true, requiresHuman: false };
+    }
+
+    const decision = await classifyUnmatchedReply(text, scenario, step);
+    const aiBranch = (step.branches || []).find((branch) => branch.id === decision.branchId);
+    if (decision.decision === "continue_branch" && decision.confidence >= 0.82 && aiBranch) {
+      await run(organizationId, conversationId, scenario, aiBranch.nextStepId);
+      log("info", "Conversation scenario AI branch selected", { scenario: scenario.key, step: step.id, branch: aiBranch.id, confidence: decision.confidence });
+      return { handled: true, requiresHuman: false };
+    }
+    if (decision.decision === "clarify" && decision.confidence >= 0.7) {
+      await sendClarification(organizationId, conversationId, step);
+      log("info", "Conversation scenario clarification sent", { scenario: scenario.key, step: step.id, confidence: decision.confidence });
+      return { handled: true, requiresHuman: false };
+    }
+    log("info", "Conversation scenario requires human attention", { scenario: scenario.key, step: step.id, confidence: decision.confidence || 0 });
+    return { handled: false, requiresHuman: true };
   }
-  const match = newStart;
-  if (!match) return false;
-  await run(organizationId, conversationId, match, match.steps[0].id);
-  log("info", "Conversation scenario started", { scenario: match.key });
-  return true;
+
+  if (!newStart) return { handled: false, requiresHuman: false };
+  await run(organizationId, conversationId, newStart, newStart.steps[0].id);
+  log("info", "Conversation scenario started", { scenario: newStart.key });
+  return { handled: true, requiresHuman: false };
 };
