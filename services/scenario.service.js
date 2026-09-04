@@ -60,6 +60,7 @@ const log = (level, message, fields = {}) =>
 const branchSchema = z.object({
   id: z.string().trim().min(1).max(80),
   name: z.string().trim().min(1).max(100),
+  aiDescription: z.string().trim().max(700).optional(),
   examples: z.array(z.string().trim().min(1).max(240)).min(1).max(30),
   nextStepId: z.string().trim().min(1).max(80),
 });
@@ -426,7 +427,7 @@ const classifyUnmatchedReply = async (text, scenario, step) => {
         model: process.env.OPENAI_AUTOMATION_MODEL,
         store: false,
         instructions: "You are a cautious Spanish WhatsApp sales-flow router. Decide only one action for the customer reply in the active scenario. Use continue_branch only when the reply clearly belongs to one listed branch. Use clarify when the customer is merely reviewing, asking for time, or needs a brief contextual clarification. Use requires_human for a specific quote, quantity/product request not covered by a branch, unrelated request, ambiguity, or low confidence. Never invent an answer, never choose a branch by keyword alone, and do not send a catalog.",
-        input: JSON.stringify({ customerMessage: text, activeScenario: { name: scenario.name, description: scenario.aiDescription || "" }, waitingStep: { label: step.label, fallbackMessage: step.fallbackBody || "" }, branches: branches.map((branch) => ({ id: branch.id, name: branch.name, examples: branch.examples })) }),
+        input: JSON.stringify({ customerMessage: text, activeScenario: { name: scenario.name, description: scenario.aiDescription || "" }, waitingStep: { label: step.label, fallbackMessage: step.fallbackBody || "" }, branches: branches.map((branch) => ({ id: branch.id, name: branch.name, description: branch.aiDescription || "", examples: branch.examples })) }),
         text: { format: { type: "json_schema", name: "scenario_reply_decision", strict: true, schema: { type: "object", properties: { decision: { type: "string", enum: ["continue_branch", "clarify", "requires_human"] }, branchId: { type: ["string", "null"] }, confidence: { type: "number" } }, required: ["decision", "branchId", "confidence"], additionalProperties: false } } },
       }),
       signal: AbortSignal.timeout(8000),
