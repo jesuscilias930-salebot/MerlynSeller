@@ -3,6 +3,7 @@ const realtime = require('../lib/realtime');
 const conversations = require('./conversation.service');
 const leads = require('./lead.service');
 const automations = require('./automation.service');
+const metaConversions = require('./meta-conversions.service');
 
 const textFor = (message) => message.text?.body || message.caption || `[${message.type || 'message'}]`;
 const mediaIdFor = (message) => message?.[message.type]?.id || null;
@@ -96,7 +97,12 @@ exports.process = async (payload) => {
           message,
           contactNames.get(message.from),
         );
-        if (stored?.inserted) await automations.processIncoming(account.rows[0].organization_id, stored.conversationId, message);
+        if (stored?.inserted) {
+          // CAPI reporting is intentionally isolated from message processing:
+          // an unavailable Meta endpoint can never prevent a chat from being stored.
+          await metaConversions.captureInboundReferral(account.rows[0].organization_id, stored.conversationId, message);
+          await automations.processIncoming(account.rows[0].organization_id, stored.conversationId, message);
+        }
       }
       for (const status of value.statuses || []) await updateStatus(status);
     }

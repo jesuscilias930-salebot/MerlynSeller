@@ -45,6 +45,18 @@ services:
         sync: false
       - key: WHATSAPP_GRAPH_API_VERSION
         sync: false
+      - key: META_CAPI_ENABLED
+        sync: false
+      - key: META_CAPI_ACCESS_TOKEN
+        sync: false
+      - key: META_CAPI_DATASET_ID
+        sync: false
+      - key: META_CAPI_PAGE_ID
+        sync: false
+      - key: META_CAPI_GRAPH_API_VERSION
+        sync: false
+      - key: META_CAPI_TEST_EVENT_CODE
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY
@@ -80,6 +92,18 @@ services:
       - key: WHATSAPP_PHONE_NUMBER_ID
         sync: false
       - key: WHATSAPP_GRAPH_API_VERSION
+        sync: false
+      - key: META_CAPI_ENABLED
+        sync: false
+      - key: META_CAPI_ACCESS_TOKEN
+        sync: false
+      - key: META_CAPI_DATASET_ID
+        sync: false
+      - key: META_CAPI_PAGE_ID
+        sync: false
+      - key: META_CAPI_GRAPH_API_VERSION
+        sync: false
+      - key: META_CAPI_TEST_EVENT_CODE
         sync: false
 
   - type: keyvalue

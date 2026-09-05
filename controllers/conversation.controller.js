@@ -1,5 +1,6 @@
 const conversations = require('../services/conversation.service');
 const automations = require('../services/automation.service');
+const metaConversions = require('../services/meta-conversions.service');
 
 const handle = (error, res, next) => 
     error.status ? 
@@ -44,6 +45,11 @@ exports.remove = async (req, res, next) => {
 };
 exports.learnIntent = async (req, res, next) => {
     try { return res.json(await automations.learnFromMessage(req.auth.organizationId, req.params.id, req.params.messageId, req.body.intentId)); } catch (error) { return handle(error, res, next); }
+};
+
+exports.reportPurchase = async (req, res, next) => {
+    try { return res.status(202).json(await metaConversions.reportPurchase(req.auth.organizationId, req.params.id, req.body)); }
+    catch (error) { return handle(error, res, next); }
 };
 
 exports.create = async (req, res, next) => {
