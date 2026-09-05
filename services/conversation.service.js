@@ -221,6 +221,11 @@ exports.queueEntrepreneurPackages = async (organizationId, conversationId, input
   const queued = [];
   for (const packageId of requestedIds) {
     const item = byId.get(packageId);
+    if (!item.images.length) {
+      const error = new Error('El bundle seleccionado aún no tiene fotografías');
+      error.status = 400;
+      throw error;
+    }
     for (const image of item.images) queued.push(await exports.queueExistingMedia(organizationId, conversationId, 'image', image.mediaId, image.caption || item.group_caption));
   }
   return { queued };
