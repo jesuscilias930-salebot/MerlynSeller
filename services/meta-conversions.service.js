@@ -18,8 +18,6 @@ const config = () => ({
   testEventCode: process.env.META_CAPI_TEST_EVENT_CODE,
 });
 
-const normalizePhone = (phone) => String(phone || '').replace(/\D/g, '');
-const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const clean = (value) => typeof value === 'string' && value.trim() ? value.trim() : null;
 const eventTime = () => Math.floor(Date.now() / 1000);
 
@@ -28,14 +26,13 @@ const configured = () => {
   return Boolean(enabled() && current.token && current.datasetId && current.pageId);
 };
 
-const userData = ({ phoneNumber, ctwaClid, pageScopedUserId }) => {
-  const result = {};
-  const phone = normalizePhone(phoneNumber);
-  if (phone) result.ph = [hash(phone)];
-  if (clean(ctwaClid)) result.ctwa_clid = clean(ctwaClid);
-  if (clean(pageScopedUserId)) result.page_scoped_user_id = clean(pageScopedUserId);
-  return result;
-};
+// Meta's business-messaging CAPI accepts ctwa_clid as the identifying signal
+// for Click-to-WhatsApp measurement. It is deliberately not a general CRM
+// import: a phone hash or WhatsApp sender id must not be substituted here.
+const userData = ({ ctwaClid, pageId }) => ({
+  ...(clean(ctwaClid) ? { ctwa_clid: clean(ctwaClid) } : {}),
+  ...(clean(pageId) ? { page_id: clean(pageId) } : {}),
+});
 
 const endpoint = () => {
   const current = config();
@@ -74,7 +71,10 @@ const send = async ({ organizationId, conversationId, eventName, dedupeKey, payl
       signal: AbortSignal.timeout(12_000),
     });
     const responseBody = await response.json().catch(() => ({}));
-    if (!response.ok) throw Object.assign(new Error(responseBody.error?.message || `Meta CAPI responded with HTTP ${response.status}`), { responseBody });
+    if (!response.ok) {
+      const metaError = responseBody.error || {};
+      throw Object.assign(new Error(metaError.error_user_msg || metaError.message || `Meta CAPI responded with HTTP ${response.status}`), { responseBody });
+    }
     await db.query("UPDATE meta_conversion_events SET status='sent',response=$2,sent_at=now() WHERE organization_id=$1 AND dedupe_key=$3", [organizationId, JSON.stringify(responseBody), dedupeKey]);
     console.log(JSON.stringify({ level: 'info', message: 'Meta CAPI event sent', eventName, conversationId }));
     return { sent: true };
@@ -114,8 +114,7 @@ exports.captureInboundReferral = async (organizationId, conversationId, message)
     event_id: providerEventId,
     action_source: 'business_messaging',
     messaging_channel: 'whatsapp',
-    page_id: config().pageId,
-    user_data: userData({ phoneNumber: row.phone_number, ctwaClid: row.meta_ctwa_clid, pageScopedUserId: row.meta_page_scoped_user_id }),
+    user_data: userData({ ctwaClid: row.meta_ctwa_clid, pageId: config().pageId }),
   };
   const outcome = await send({ organizationId, conversationId, eventName: 'LeadSubmitted', dedupeKey: `lead:${conversationId}`, payload, providerEventId });
   if (outcome.sent) await db.query('UPDATE conversations SET meta_lead_submitted_at=now() WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]);
@@ -141,6 +140,13 @@ exports.reportPurchase = async (organizationId, conversationId, input) => {
     error.status = 404;
     throw error;
   }
+  // A Purchase reported with action_source=business_messaging is attributable
+  // only when the conversation originated from a Click-to-WhatsApp ad. Meta
+  // supplies this identifier on the first inbound webhook referral.
+  if (!clean(row.meta_ctwa_clid)) {
+    console.info(JSON.stringify({ level: 'info', message: 'Meta CAPI Purchase skipped: conversation has no Click-to-WhatsApp attribution', conversationId }));
+    return { sent: false, skipped: true, reason: 'not_attributed_to_ctwa' };
+  }
   const providerEventId = crypto.randomUUID();
   const saleId = String(data.saleId);
   const payload = {
@@ -149,8 +155,7 @@ exports.reportPurchase = async (organizationId, conversationId, input) => {
     event_id: providerEventId,
     action_source: 'business_messaging',
     messaging_channel: 'whatsapp',
-    page_id: config().pageId,
-    user_data: userData({ phoneNumber: row.phone_number, ctwaClid: row.meta_ctwa_clid, pageScopedUserId: row.meta_page_scoped_user_id }),
+    user_data: userData({ ctwaClid: row.meta_ctwa_clid, pageId: config().pageId }),
     custom_data: {
       currency: data.currency.toUpperCase(),
       value: Number(data.value.toFixed(2)),
