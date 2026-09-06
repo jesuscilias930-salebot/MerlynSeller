@@ -111,6 +111,7 @@ const entrepreneurPackageSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   caption: z.string().trim().max(1024).nullable().optional(),
   bundleType: z.string().trim().min(1).max(120).nullable().optional(),
+  imageCategory: z.string().trim().min(1).max(120).nullable().optional(),
   controlBundleId: z.coerce.number().int().positive().nullable().optional(),
 });
 
@@ -121,6 +122,7 @@ const packageResponse = (row) => ({
   filename: row.filename,
   caption: row.caption,
   bundleType: row.bundle_type,
+  imageCategory: row.image_category,
   controlBundleId: row.control_bundle_id,
   position: row.position,
   created_at: row.created_at,
@@ -145,9 +147,9 @@ exports.listEntrepreneurPackages = async (req, res, next) => {
 
 exports.createEntrepreneurPackage = async (req, res, next) => {
   try {
-    const parsed = entrepreneurPackageSchema.pick({ name: true, bundleType: true, controlBundleId: true }).safeParse(req.body);
+    const parsed = entrepreneurPackageSchema.pick({ name: true, bundleType: true, imageCategory: true, controlBundleId: true }).safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
-    const result = await db.query(`INSERT INTO entrepreneur_packages (organization_id, name, bundle_type, control_bundle_id, position) VALUES ($1,$2,$3,$4,COALESCE((SELECT MAX(position)+1 FROM entrepreneur_packages WHERE organization_id=$1),0)) RETURNING *`, [req.auth.organizationId, parsed.data.name, parsed.data.bundleType || null, parsed.data.controlBundleId || null]);
+    const result = await db.query(`INSERT INTO entrepreneur_packages (organization_id, name, bundle_type, image_category, control_bundle_id, position) VALUES ($1,$2,$3,$4,$5,COALESCE((SELECT MAX(position)+1 FROM entrepreneur_packages WHERE organization_id=$1),0)) RETURNING *`, [req.auth.organizationId, parsed.data.name, parsed.data.bundleType || null, parsed.data.imageCategory || null, parsed.data.controlBundleId || null]);
     return res.status(201).json(packageResponse({ ...result.rows[0], images: [] }));
   } catch (error) { return next(error); }
 };
@@ -159,7 +161,8 @@ exports.uploadEntrepreneurPackage = async (req, res, next) => {
     const filename = decodeURIComponent(req.get('x-upload-filename') || 'paquete-emprendedor');
     const requestedName = decodeURIComponent(req.get('x-package-name') || filename.replace(/\.[^.]+$/, '')).trim();
     const packageId = req.get('x-package-id');
-    const parsed = entrepreneurPackageSchema.pick({ name: true }).safeParse({ name: requestedName });
+    const requestedCategory = decodeURIComponent(req.get('x-image-category') || '').trim();
+    const parsed = entrepreneurPackageSchema.pick({ name: true, imageCategory: true }).safeParse({ name: requestedName, imageCategory: requestedCategory || null });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
     const uploaded = await messageService.uploadMedia({ buffer: req.body, contentType, filename });
     const result = await db.transaction(async (client) => {
@@ -168,7 +171,7 @@ exports.uploadEntrepreneurPackage = async (req, res, next) => {
         const group = await client.query('SELECT id FROM entrepreneur_packages WHERE id=$1 AND organization_id=$2', [groupId, req.auth.organizationId]);
         if (!group.rows[0]) { const error = new Error('Image collection not found'); error.status = 404; throw error; }
       } else {
-        groupId = (await client.query(`INSERT INTO entrepreneur_packages (organization_id, name, position) VALUES ($1,$2,COALESCE((SELECT MAX(position)+1 FROM entrepreneur_packages WHERE organization_id=$1),0)) RETURNING id`, [req.auth.organizationId, parsed.data.name])).rows[0].id;
+        groupId = (await client.query(`INSERT INTO entrepreneur_packages (organization_id, name, image_category, position) VALUES ($1,$2,$3,COALESCE((SELECT MAX(position)+1 FROM entrepreneur_packages WHERE organization_id=$1),0)) RETURNING id`, [req.auth.organizationId, parsed.data.name, parsed.data.imageCategory || null])).rows[0].id;
       }
       const image = await client.query(`INSERT INTO entrepreneur_package_images (package_id, media_id, filename, position) VALUES ($1,$2,$3,COALESCE((SELECT MAX(position)+1 FROM entrepreneur_package_images WHERE package_id=$1),0)) RETURNING id, media_id AS "mediaId", filename, caption, position`, [groupId, uploaded.mediaId, filename]);
       await client.query('UPDATE entrepreneur_packages SET media_id=COALESCE(media_id,$3), filename=COALESCE(filename,$4), updated_at=now() WHERE id=$1 AND organization_id=$2', [groupId, req.auth.organizationId, uploaded.mediaId, filename]);
@@ -185,10 +188,10 @@ exports.updateEntrepreneurPackage = async (req, res, next) => {
     const value = parsed.data;
     const result = await db.query(`
       UPDATE entrepreneur_packages
-      SET name=COALESCE($3,name), caption=COALESCE($4,caption), bundle_type=COALESCE($5,bundle_type), control_bundle_id=COALESCE($6,control_bundle_id), updated_at=now()
+      SET name=COALESCE($3,name), caption=COALESCE($4,caption), bundle_type=COALESCE($5,bundle_type), control_bundle_id=COALESCE($6,control_bundle_id), image_category=COALESCE($7,image_category), updated_at=now()
       WHERE id=$1 AND organization_id=$2
       RETURNING *
-    `, [req.params.id, req.auth.organizationId, value.name, value.caption, value.bundleType, value.controlBundleId]);
+    `, [req.params.id, req.auth.organizationId, value.name, value.caption, value.bundleType, value.controlBundleId, value.imageCategory]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Entrepreneur package not found' });
     return res.json(packageResponse(result.rows[0]));
   } catch (error) { return next(error); }
