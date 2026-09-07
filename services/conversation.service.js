@@ -217,11 +217,36 @@ exports.queueSavedSticker = async (organizationId, conversationId, stickerId) =>
 };
 
 exports.queueEntrepreneurPackages = async (organizationId, conversationId, input) => {
-  const parsed = z.object({ packageIds: z.array(z.string().uuid()).min(1).max(20) }).safeParse(input);
+  const parsed = z.object({
+    packageIds: z.array(z.string().uuid()).min(1).max(20).optional(),
+    imageIds: z.array(z.string().uuid()).min(1).max(50).optional(),
+  }).refine((value) => Boolean(value.packageIds?.length) !== Boolean(value.imageIds?.length), 'Select packageIds or imageIds, not both').safeParse(input);
   if (!parsed.success) {
     const error = new Error(parsed.error.issues[0].message);
     error.status = 400;
     throw error;
+  }
+  if (parsed.data.imageIds) {
+    const requestedIds = parsed.data.imageIds;
+    const images = await db.query(
+      `SELECT image.id, image.media_id AS "mediaId", COALESCE(image.caption, p.caption) AS caption
+       FROM entrepreneur_package_images image
+       JOIN entrepreneur_packages p ON p.id=image.package_id
+       WHERE p.organization_id=$1 AND image.id = ANY($2::uuid[])`,
+      [organizationId, requestedIds],
+    );
+    const byId = new Map(images.rows.map((image) => [image.id, image]));
+    if (byId.size !== requestedIds.length) {
+      const error = new Error('Una o más imágenes seleccionadas no fueron encontradas');
+      error.status = 404;
+      throw error;
+    }
+    const queued = [];
+    for (const imageId of requestedIds) {
+      const image = byId.get(imageId);
+      queued.push(await exports.queueExistingMedia(organizationId, conversationId, 'image', image.mediaId, image.caption));
+    }
+    return { queued };
   }
   const requestedIds = parsed.data.packageIds;
   const templates = await db.query(

@@ -81,9 +81,10 @@ const drainConversation = async (conversationId, jobId) => {
         await realtime.publish(message.organization_id, 'message.sent', message.conversation_id);
         console.log(JSON.stringify({ level: 'info', message: 'Outbound message sent in FIFO order', conversationId, messageId: message.id, sequence: message.outbound_sequence }));
       } catch (error) {
-        await db.query("UPDATE messages SET status = 'failed', error_code = $2, updated_at = now() WHERE id = $1", [message.id, error.message]);
+        const failure = error.meta?.details || error.meta?.message || error.message;
+        await db.query("UPDATE messages SET status = 'failed', error_code = $2, updated_at = now() WHERE id = $1", [message.id, failure]);
         await realtime.publish(message.organization_id, 'message.failed', message.conversation_id);
-        console.error(JSON.stringify({ level: 'error', message: 'Outbound message failed in FIFO drain', conversationId, messageId: message.id, sequence: message.outbound_sequence, errorType: error.name }));
+        console.error(JSON.stringify({ level: 'error', message: 'Outbound message failed in FIFO drain', conversationId, messageId: message.id, sequence: message.outbound_sequence, errorType: error.name, status: error.status, errorMessage: failure, meta: error.meta }));
       }
       processed += 1;
     }

@@ -116,8 +116,11 @@ const metaError = (payload) => {
   if (!error) return undefined;
   return {
     code: error.code,
+    subcode: error.error_subcode,
     type: error.type,
     message: error.message,
+    details: error.error_data?.details,
+    traceId: error.fbtrace_id,
   };
 };
 
@@ -141,8 +144,14 @@ const send = async (payload) => {
 
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    console.error(JSON.stringify({ level: 'warn', message: 'Meta rejected message', status: response.status }));
-    throw new MessageError(response.status >= 500 ? 502 : 400, 'Meta rejected the message', metaError(body));
+    const meta = metaError(body);
+    console.error(JSON.stringify({
+      level: 'warn',
+      message: 'Meta rejected message',
+      status: response.status,
+      meta,
+    }));
+    throw new MessageError(response.status >= 500 ? 502 : 400, 'Meta rejected the message', meta);
   }
 
   console.log(JSON.stringify({ level: 'info', message: 'WhatsApp message accepted by Meta', type: payload.type }));
