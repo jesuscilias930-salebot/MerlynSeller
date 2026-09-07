@@ -295,7 +295,8 @@ exports.sendCtaUrl = async (input) => {
   };
   const header = optionalText(input.header, 'header', 60);
   const footer = optionalText(input.footer, 'footer', 60);
-  if (header) interactive.header = { type: 'text', text: header };
+  if (input.headerMediaId) interactive.header = { type: 'image', image: { id: requiredString(input.headerMediaId, 'headerMediaId', 256) } };
+  else if (header) interactive.header = { type: 'text', text: header };
   if (footer) interactive.footer = { text: footer };
 
   return send({

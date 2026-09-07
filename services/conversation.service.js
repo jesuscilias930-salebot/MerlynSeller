@@ -14,6 +14,14 @@ const documentSchema = z.object({
   filename: z.string().trim().min(1).max(240).optional(),
   caption: z.string().trim().max(1024).optional(),
 });
+const ctaUrlSchema = z.object({
+  header: z.string().trim().max(60).optional(),
+  headerMediaId: z.string().trim().min(1).max(256).optional(),
+  body: z.string().trim().min(1).max(1024),
+  footer: z.string().trim().max(60).optional(),
+  buttonText: z.string().trim().min(1).max(20),
+  url: z.string().trim().url().max(2000),
+});
 
 const validation = (schema, value) => {
   const parsed = schema.safeParse(value);
@@ -125,6 +133,18 @@ exports.queueText = async (organizationId, conversationId, input) => {
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add('send-text', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
   return { id: result.rows[0].id, status: 'pending' };
+};
+
+exports.queueCtaUrl = async (organizationId, conversationId, input) => {
+  const data = validation(ctaUrlSchema, input);
+  if (!/^https:\/\//i.test(data.url)) { const error = new Error('url must use HTTPS'); error.status = 400; throw error; }
+  const result = await db.query(
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status) SELECT $1, id, 'outbound', 'interactive', $3, $4, 'pending' FROM conversations WHERE id=$2 AND organization_id=$1 RETURNING id",
+    [organizationId, conversationId, JSON.stringify(data), data.headerMediaId || null],
+  );
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  await outboundQueue().add('send-cta-url', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
+  return { id: result.rows[0].id, status: 'pending', type: 'interactive' };
 };
 
 exports.queueDocument = async (organizationId, conversationId, input) => {

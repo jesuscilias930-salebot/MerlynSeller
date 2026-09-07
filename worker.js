@@ -35,7 +35,9 @@ const send = (message) => message.type === 'document'
         ? messageService.sendAttachment({ to: message.phone_number, type: 'audio', id: message.media_id })
         : message.type === 'video'
           ? messageService.sendVideo({ to: message.phone_number, id: message.media_id })
-          : messageService.sendText({ to: message.phone_number, body: message.body, replyToProviderMessageId: message.reply_to_provider_message_id || undefined });
+          : message.type === 'interactive'
+            ? messageService.sendCtaUrl({ to: message.phone_number, ...JSON.parse(message.body || '{}'), headerMediaId: message.media_id || undefined })
+            : messageService.sendText({ to: message.phone_number, body: message.body, replyToProviderMessageId: message.reply_to_provider_message_id || undefined });
 
 const releaseLock = (key, token) => outboundRedis.eval(
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0",
