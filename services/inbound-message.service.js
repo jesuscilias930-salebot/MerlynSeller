@@ -33,6 +33,31 @@ const saveMessage = async (organizationId, message, contactName) => {
     );
     const initialColumnId = await leads.initialColumnId(client, organizationId);
     const conversation = await client.query("INSERT INTO conversations (organization_id, contact_id, lead_column_id) VALUES ($1, $2, $3) ON CONFLICT (organization_id, contact_id) DO UPDATE SET updated_at = now(), status = 'open', lead_column_id = COALESCE(conversations.lead_column_id, EXCLUDED.lead_column_id) RETURNING id", [organizationId, contact.rows[0].id, initialColumnId]);
+    if (message.type === 'reaction') {
+      const targetProviderMessageId = message.reaction?.message_id;
+      const emoji = message.reaction?.emoji;
+      if (!targetProviderMessageId || typeof emoji !== 'string') {
+        return { conversationId: conversation.rows[0].id, inserted: false, isReaction: true };
+      }
+      // A contact has one current reaction for a message. Meta sends an empty
+      // emoji when that reaction is removed, so retain no stale badge in UI.
+      await client.query(
+        `DELETE FROM message_reactions
+         WHERE organization_id=$1 AND conversation_id=$2
+           AND target_provider_message_id=$3 AND actor_direction='inbound'`,
+        [organizationId, conversation.rows[0].id, targetProviderMessageId],
+      );
+      if (emoji) {
+        await client.query(
+          `INSERT INTO message_reactions
+             (organization_id, conversation_id, target_provider_message_id, actor_direction, emoji, provider_message_id)
+           VALUES ($1, $2, $3, 'inbound', $4, $5)
+           ON CONFLICT (provider_message_id) DO UPDATE SET emoji=EXCLUDED.emoji, updated_at=now()`,
+          [organizationId, conversation.rows[0].id, targetProviderMessageId, emoji, message.id || null],
+        );
+      }
+      return { conversationId: conversation.rows[0].id, inserted: true, isReaction: true };
+    }
     // Meta adds context.id when the customer used WhatsApp's Reply action.
     // Resolve that provider id inside this conversation so unrelated messages
     // can never be linked merely because of a malformed webhook payload.
@@ -50,7 +75,7 @@ const saveMessage = async (organizationId, message, contactName) => {
     await realtime.publish(organizationId, 'message.received', result.conversationId);
     console.log(JSON.stringify({
       level: 'info',
-      message: 'Incoming WhatsApp message stored',
+      message: result.isReaction ? 'Incoming WhatsApp reaction stored' : 'Incoming WhatsApp message stored',
       messageType: message.type || 'unknown',
       conversationId: result.conversationId,
     }));
@@ -97,7 +122,7 @@ exports.process = async (payload) => {
           message,
           contactNames.get(message.from),
         );
-        if (stored?.inserted) {
+        if (stored?.inserted && !stored.isReaction) {
           // CAPI reporting is intentionally isolated from message processing:
           // an unavailable Meta endpoint can never prevent a chat from being stored.
           await metaConversions.captureInboundReferral(account.rows[0].organization_id, stored.conversationId, message);

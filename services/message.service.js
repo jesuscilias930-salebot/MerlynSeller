@@ -337,3 +337,25 @@ exports.sendTemplate = async (input) => {
     },
   });
 };
+
+// Reactions are deliberately sent immediately, rather than through the normal
+// outbound-message queue: Meta requires the id of an already received message
+// and returns only a `sent` status webhook for this message type.
+exports.sendReaction = async (input) => {
+  if (typeof input.emoji !== 'string' || input.emoji.length > 32) {
+    throw new MessageError(400, 'emoji must be a short emoji or an empty string to remove it');
+  }
+  if (input.emoji.trim().length === 0 && input.emoji.length !== 0) {
+    throw new MessageError(400, 'emoji must be an emoji or an empty string to remove it');
+  }
+  return send({
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: recipient(input.to),
+    type: 'reaction',
+    reaction: {
+      message_id: requiredString(input.messageId, 'messageId', 256),
+      emoji: input.emoji,
+    },
+  });
+};

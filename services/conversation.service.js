@@ -3,6 +3,7 @@ const db = require('../lib/db');
 const { outboundQueue } = require('../lib/queue');
 const leads = require('./lead.service');
 const messageService = require('./message.service');
+const realtime = require('../lib/realtime');
 
 const phone = z.string().trim().transform((value) => value.replace(/^\+/, '')).refine((value) => /^\d{8,15}$/.test(value), 'phoneNumber must be E.164');
 const createSchema = z.object({ phoneNumber: phone, name: z.string().trim().max(120).optional() });
@@ -25,6 +26,9 @@ const ctaUrlSchema = z.object({
 const templateMessageSchema = z.object({
   templateId: z.string().uuid(),
   manualValues: z.record(z.string(), z.string().trim().max(1024)).optional(),
+});
+const reactionSchema = z.object({
+  emoji: z.string().max(32).refine((value) => value === '' || value.trim().length > 0, 'emoji must be an emoji or empty to remove it'),
 });
 
 const validation = (schema, value) => {
@@ -53,12 +57,60 @@ exports.list = async (organizationId, userId) => (await db.query(`
 `, [organizationId, userId])).rows;
 exports.messages = async (organizationId, conversationId) => (await db.query(`
   SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename, m.status, m.error_code, m.provider_message_id, m.created_at,
-    m.reply_to_message_id AS "replyToMessageId", replied.body AS "replyToBody", replied.type AS "replyToType", replied.direction AS "replyToDirection"
+    m.reply_to_message_id AS "replyToMessageId", replied.body AS "replyToBody", replied.type AS "replyToType", replied.direction AS "replyToDirection",
+    COALESCE((
+      SELECT json_agg(json_build_object('emoji', reaction.emoji, 'actorDirection', reaction.actor_direction) ORDER BY reaction.created_at)
+      FROM message_reactions reaction
+      WHERE reaction.organization_id=m.organization_id
+        AND reaction.conversation_id=m.conversation_id
+        AND reaction.target_provider_message_id=m.provider_message_id
+    ), '[]'::json) AS reactions
   FROM messages m
   LEFT JOIN messages replied ON replied.id = m.reply_to_message_id
   WHERE m.organization_id = $1 AND m.conversation_id = $2
   ORDER BY m.created_at ASC
 `, [organizationId, conversationId])).rows;
+
+exports.reactToMessage = async (organizationId, conversationId, messageId, input) => {
+  const data = validation(reactionSchema, input);
+  const target = await db.query(
+    `SELECT message.provider_message_id, contact.phone_number
+     FROM messages message
+     JOIN conversations conversation ON conversation.id=message.conversation_id
+     JOIN contacts contact ON contact.id=conversation.contact_id
+     WHERE message.id=$1 AND message.organization_id=$2 AND message.conversation_id=$3
+       AND message.direction='inbound'`,
+    [messageId, organizationId, conversationId],
+  );
+  if (!target.rows[0]?.provider_message_id) {
+    const error = new Error('Solo puedes reaccionar a un mensaje recibido que ya esté disponible en WhatsApp');
+    error.status = 400;
+    throw error;
+  }
+  await messageService.sendReaction({
+    to: target.rows[0].phone_number,
+    messageId: target.rows[0].provider_message_id,
+    emoji: data.emoji,
+  });
+  if (data.emoji === '') {
+    await db.query(
+      `DELETE FROM message_reactions
+       WHERE organization_id=$1 AND conversation_id=$2 AND target_provider_message_id=$3 AND actor_direction='outbound'`,
+      [organizationId, conversationId, target.rows[0].provider_message_id],
+    );
+  } else {
+    await db.query(
+      `INSERT INTO message_reactions
+         (organization_id, conversation_id, target_provider_message_id, actor_direction, emoji)
+       VALUES ($1, $2, $3, 'outbound', $4)
+       ON CONFLICT (organization_id, conversation_id, target_provider_message_id, actor_direction)
+       DO UPDATE SET emoji=EXCLUDED.emoji, updated_at=now()`,
+      [organizationId, conversationId, target.rows[0].provider_message_id, data.emoji],
+    );
+  }
+  await realtime.publish(organizationId, 'message.reaction_updated', conversationId);
+  return { emoji: data.emoji };
+};
 exports.documentOptions = async (organizationId, conversationId) => {
   const conversation = await db.query('SELECT 1 FROM conversations WHERE id = $1 AND organization_id = $2', [conversationId, organizationId]);
   if (!conversation.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }

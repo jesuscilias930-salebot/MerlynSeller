@@ -4,7 +4,7 @@ const metaConversions = require('../services/meta-conversions.service');
 
 const handle = (error, res, next) => 
     error.status ? 
-res.status(error.status).json({ error: error.message }) 
+res.status(error.status).json(error.toResponse ? error.toResponse() : { error: error.message })
 : next(error);
 
 exports.list = async (req, res, next) =>
@@ -45,6 +45,10 @@ exports.remove = async (req, res, next) => {
 };
 exports.learnIntent = async (req, res, next) => {
     try { return res.json(await automations.learnFromMessage(req.auth.organizationId, req.params.id, req.params.messageId, req.body.intentId)); } catch (error) { return handle(error, res, next); }
+};
+exports.react = async (req, res, next) => {
+    try { return res.json(await conversations.reactToMessage(req.auth.organizationId, req.params.id, req.params.messageId, req.body)); }
+    catch (error) { return handle(error, res, next); }
 };
 
 exports.reportPurchase = async (req, res, next) => {

@@ -132,6 +132,7 @@ Authenticated UI endpoints:
 | `PATCH /automations/:id` | Owner/admin updates an automated intent |
 | `DELETE /automations/:id` | Owner/admin removes an automated intent |
 | `POST /conversations/:id/messages/text` | Queue `{ "body": "..." }` for delivery |
+| `POST /conversations/:id/messages/:messageId/reaction` | React to a received WhatsApp message with `{ "emoji": "👍" }`; send `{ "emoji": "" }` to remove your reaction |
 | `POST /conversations/:id/messages/document` | Queue a reusable Meta document `{ "mediaId": "...", "filename": "...", "caption": "..." }` |
 | `POST /conversations/:id/messages/document/upload` | Upload, send, and save a new PDF as reusable document (raw body; maximum 25 MB) |
 | `POST /conversations/:id/messages/audio` | Upload and queue an AAC, M4A, MP3, AMR, OGG, or OPUS audio file (raw body) |

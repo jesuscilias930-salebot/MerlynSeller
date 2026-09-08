@@ -14,6 +14,7 @@ router.post('/', controller.create);
 router.delete('/:id', controller.remove);
 router.get('/:id/messages', controller.messages);
 router.post('/:id/messages/:messageId/learn-intent', controller.learnIntent);
+router.post('/:id/messages/:messageId/reaction', controller.react);
 router.post('/:id/read', controller.markRead);
 router.patch('/:id/automation', controller.setAutoReply);
 router.patch('/:id/scenarios', controller.setScenarioEnabled);
