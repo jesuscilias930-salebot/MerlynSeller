@@ -37,6 +37,15 @@ const settingsSchema = z.object({
   origin: addressSchema,
   defaultPackage: packageSchema.optional(),
 });
+const savedAddressSchema = z.object({
+  kind: z.enum(['origin', 'destination']),
+  name: z.string().trim().min(1).max(100),
+  address: addressSchema,
+});
+const savedPackageSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  package: packageSchema,
+});
 const shippingInputSchema = z.object({
   conversationId: z.string().uuid().optional(),
   saleExternalId: z.union([z.string().trim().min(1).max(120), z.number().int().positive()]).optional(),
@@ -111,6 +120,42 @@ exports.saveSettings = async (organizationId, input) => {
   console.log(JSON.stringify({ level: 'info', message: 'Envia shipping settings saved', organizationId, environment, originCountry: data.origin.country, originPostalCode: data.origin.postalCode, tokenConfigured: Boolean(process.env.ENVIA_TOKEN) }));
   return { ...result.rows[0], tokenConfigured: Boolean(process.env.ENVIA_TOKEN) };
 };
+exports.listSaved = async (organizationId) => {
+  const [addresses, packages] = await Promise.all([
+    db.query(`SELECT id, kind, name, address, created_at AS "createdAt", updated_at AS "updatedAt" FROM envia_saved_addresses WHERE organization_id=$1 ORDER BY kind, created_at DESC`, [organizationId]),
+    db.query(`SELECT id, name, package, created_at AS "createdAt", updated_at AS "updatedAt" FROM envia_saved_packages WHERE organization_id=$1 ORDER BY created_at DESC`, [organizationId]),
+  ]);
+  return { addresses: addresses.rows, packages: packages.rows };
+};
+exports.saveAddress = async (organizationId, input) => {
+  const data = parse(savedAddressSchema, input);
+  const result = await db.query(`INSERT INTO envia_saved_addresses (organization_id, kind, name, address) VALUES ($1,$2,$3,$4::jsonb) RETURNING id, kind, name, address, created_at AS "createdAt", updated_at AS "updatedAt"`, [organizationId, data.kind, data.name, JSON.stringify(data.address)]);
+  console.log(JSON.stringify({ level: 'info', message: 'Envia address preset saved', organizationId, kind: data.kind, presetId: result.rows[0].id }));
+  return result.rows[0];
+};
+exports.savePackage = async (organizationId, input) => {
+  const data = parse(savedPackageSchema, input);
+  const result = await db.query(`INSERT INTO envia_saved_packages (organization_id, name, package) VALUES ($1,$2,$3::jsonb) RETURNING id, name, package, created_at AS "createdAt", updated_at AS "updatedAt"`, [organizationId, data.name, JSON.stringify(data.package)]);
+  console.log(JSON.stringify({ level: 'info', message: 'Envia package preset saved', organizationId, presetId: result.rows[0].id }));
+  return result.rows[0];
+};
+exports.deleteSaved = async (organizationId, kind, id) => {
+  if (!['origin', 'destination', 'package'].includes(kind)) throw fail(400, 'Tipo de registro guardado inválido');
+  const table = kind === 'package' ? 'envia_saved_packages' : 'envia_saved_addresses';
+  const query = kind === 'package'
+    ? `DELETE FROM ${table} WHERE id=$1 AND organization_id=$2 RETURNING id`
+    : `DELETE FROM ${table} WHERE id=$1 AND organization_id=$2 AND kind=$3 RETURNING id`;
+  const result = await db.query(query, kind === 'package' ? [id, organizationId] : [id, organizationId, kind]);
+  if (!result.rows[0]) throw fail(404, 'Registro guardado no encontrado');
+  return { id };
+};
+exports.listCustomers = async (organizationId) => (await db.query(`
+  SELECT conversation.id, contact.name, contact.phone_number AS "phoneNumber"
+  FROM conversations conversation
+  JOIN contacts contact ON contact.id=conversation.contact_id
+  WHERE conversation.organization_id=$1
+  ORDER BY contact.name NULLS LAST, conversation.updated_at DESC
+`, [organizationId])).rows;
 const payloadFor = (settings, data, includePrintSettings) => ({
   origin: settings.origin, destination: data.destination, packages: data.packages,
   shipment: { type: data.type, ...(data.carrier ? { carrier: data.carrier } : {}), ...(data.service ? { service: data.service } : {}) },
@@ -121,6 +166,28 @@ const carrierNames = (response) => {
   return [...new Set(candidates.map((carrier) => typeof carrier === 'string' ? carrier : carrier?.name).filter(Boolean))].slice(0, 30);
 };
 const ratesFrom = (response) => Array.isArray(response?.data) ? response.data : [];
+const stringValue = (value) => typeof value === 'string' && value.trim() ? value.trim() : null;
+const generatedShipmentFrom = (response) => {
+  const records = [];
+  const visit = (value, depth = 0) => {
+    if (!value || depth > 5) return;
+    if (Array.isArray(value)) { value.forEach((item) => visit(item, depth + 1)); return; }
+    if (typeof value !== 'object') return;
+    records.push(value);
+    Object.values(value).forEach((item) => visit(item, depth + 1));
+  };
+  visit(response);
+  const record = records.find((item) => ['label', 'label_url', 'labelUrl', 'tracking_number', 'trackingNumber', 'track_number', 'trackNumber'].some((key) => item[key] !== undefined)) || {};
+  const labelCandidate = record.label || record.label_url || record.labelUrl || record.label_link || record.labelLink;
+  const labelUrl = stringValue(labelCandidate) || stringValue(labelCandidate?.url) || stringValue(labelCandidate?.link) || null;
+  return {
+    trackingNumber: stringValue(record.tracking_number) || stringValue(record.trackingNumber) || stringValue(record.track_number) || stringValue(record.trackNumber) || null,
+    labelUrl,
+    price: record.totalPrice || record.total_price || record.price || null,
+    currency: stringValue(record.currency) || null,
+    responseKeys: Object.keys(record).slice(0, 25),
+  };
+};
 exports.quote = async (organizationId, input) => {
   const data = parse(shippingInputSchema, input);
   const settings = await currentSettings(organizationId);
@@ -153,18 +220,39 @@ exports.quote = async (organizationId, input) => {
 exports.generate = async (organizationId, input) => {
   const data = parse(shippingInputSchema, input);
   if (!data.carrier || !data.service) throw fail(400, 'Selecciona una paquetería y un servicio antes de generar la guía');
+  if (data.conversationId) {
+    const conversation = await db.query('SELECT id FROM conversations WHERE id=$1 AND organization_id=$2', [data.conversationId, organizationId]);
+    if (!conversation.rows[0]) throw fail(404, 'La conversación seleccionada no pertenece a esta organización');
+  }
   const settings = await currentSettings(organizationId);
   if (!settings.origin?.name) throw fail(400, 'Configura primero la dirección de origen de Envia');
   const printSettings = { ...(data.settings || {}), printFormat: data.settings?.printFormat || 'PDF', printSize: data.settings?.printSize || 'STOCK_4X6' };
   const response = await request(settings.environment, '/ship/generate/', payloadFor(settings, { ...data, settings: printSettings }, true), { organizationId, carrier: data.carrier, service: data.service, destinationCountry: data.destination.country, destinationPostalCode: data.destination.postalCode, packageCount: data.packages.length });
-  const created = Array.isArray(response.data) ? response.data[0] : (response.data || response);
-  const trackingNumber = created?.tracking_number || created?.trackingNumber || created?.track_number || null;
-  const labelUrl = created?.label || created?.label_url || created?.labelUrl || null;
+  const created = generatedShipmentFrom(response);
+  const { trackingNumber, labelUrl } = created;
   const result = await db.query(`INSERT INTO shipments (organization_id, conversation_id, sale_external_id, carrier, service, tracking_number, label_url, shipment_status, status_description, price, currency, origin, destination, packages, envia_response)
     VALUES ($1,$2,$3,$4,$5,$6,$7,'created',NULL,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb)
     RETURNING id, conversation_id AS "conversationId", sale_external_id AS "saleExternalId", carrier, service, tracking_number AS "trackingNumber", label_url AS "labelUrl", shipment_status AS status, price, currency, created_at AS "createdAt"`,
-  [organizationId, data.conversationId || null, data.saleExternalId ? String(data.saleExternalId) : null, data.carrier, data.service, trackingNumber, labelUrl, created?.totalPrice || created?.price || null, created?.currency || data.settings?.currency || null, JSON.stringify(settings.origin), JSON.stringify(data.destination), JSON.stringify(data.packages), JSON.stringify(response)]);
-  console.log(JSON.stringify({ level: 'info', message: 'Envia shipping label stored', organizationId, shipmentId: result.rows[0].id, carrier: data.carrier, service: data.service, trackingNumber: trackingNumber || null }));
+  [organizationId, data.conversationId || null, data.saleExternalId ? String(data.saleExternalId) : null, data.carrier, data.service, trackingNumber, labelUrl, created.price, created.currency || data.settings?.currency || null, JSON.stringify(settings.origin), JSON.stringify(data.destination), JSON.stringify(data.packages), JSON.stringify(response)]);
+  console.log(JSON.stringify({ level: 'info', message: 'Envia shipping label stored', organizationId, shipmentId: result.rows[0].id, carrier: data.carrier, service: data.service, trackingNumber: trackingNumber || null, labelAvailable: Boolean(labelUrl), responseKeys: created.responseKeys }));
   return result.rows[0];
 };
-exports.list = async (organizationId, conversationId) => (await db.query(`SELECT id, conversation_id AS "conversationId", sale_external_id AS "saleExternalId", carrier, service, tracking_number AS "trackingNumber", label_url AS "labelUrl", shipment_status AS status, status_description AS "statusDescription", price, currency, destination, created_at AS "createdAt", updated_at AS "updatedAt" FROM shipments WHERE organization_id=$1 AND ($2::uuid IS NULL OR conversation_id=$2) ORDER BY created_at DESC`, [organizationId, conversationId || null])).rows;
+exports.list = async (organizationId, conversationId) => {
+  const result = await db.query(`SELECT shipment.id, shipment.conversation_id AS "conversationId", shipment.sale_external_id AS "saleExternalId", shipment.carrier, shipment.service, shipment.tracking_number AS "trackingNumber", shipment.label_url AS "labelUrl", shipment.shipment_status AS status, shipment.status_description AS "statusDescription", shipment.price, shipment.currency, shipment.destination, shipment.envia_response AS "enviaResponse", shipment.created_at AS "createdAt", shipment.updated_at AS "updatedAt", contact.name AS "customerName", contact.phone_number AS "customerPhone"
+    FROM shipments shipment
+    LEFT JOIN conversations conversation ON conversation.id=shipment.conversation_id
+    LEFT JOIN contacts contact ON contact.id=conversation.contact_id
+    WHERE shipment.organization_id=$1 AND ($2::uuid IS NULL OR shipment.conversation_id=$2)
+    ORDER BY shipment.created_at DESC`, [organizationId, conversationId || null]);
+  return Promise.all(result.rows.map(async (row) => {
+    if (!row.labelUrl || !row.trackingNumber) {
+      const recovered = generatedShipmentFrom(row.enviaResponse);
+      if (recovered.labelUrl || recovered.trackingNumber) {
+        const updated = await db.query(`UPDATE shipments SET tracking_number=COALESCE(tracking_number,$2), label_url=COALESCE(label_url,$3), price=COALESCE(price,$4), currency=COALESCE(currency,$5), updated_at=now() WHERE id=$1 RETURNING tracking_number AS "trackingNumber", label_url AS "labelUrl", price, currency, updated_at AS "updatedAt"`, [row.id, recovered.trackingNumber, recovered.labelUrl, recovered.price, recovered.currency]);
+        Object.assign(row, updated.rows[0]);
+      }
+    }
+    delete row.enviaResponse;
+    return row;
+  }));
+};
