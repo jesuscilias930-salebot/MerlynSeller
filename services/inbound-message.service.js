@@ -5,9 +5,64 @@ const leads = require('./lead.service');
 const automations = require('./automation.service');
 const metaConversions = require('./meta-conversions.service');
 
-const textFor = (message) => message.text?.body || message.caption || `[${message.type || 'message'}]`;
+const text = (value, max = 1024) => typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined;
+const number = (value) => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+const textFor = (message) => {
+  if (message.text?.body) return message.text.body;
+  if (message.caption) return message.caption;
+  if (message.type === 'button') return message.button?.text || '[Botón seleccionado]';
+  if (message.type === 'interactive') return message.interactive?.button_reply?.title
+    || message.interactive?.list_reply?.title
+    || message.interactive?.nfm_reply?.body
+    || '[Respuesta interactiva]';
+  if (message.type === 'system') return message.system?.body || '[Mensaje de sistema]';
+  return `[${message.type || 'message'}]`;
+};
 const mediaIdFor = (message) => message?.[message.type]?.id || null;
 const filenameFor = (message) => message?.[message.type]?.filename || null;
+const messageMetadataFor = (message) => {
+  if (!message || typeof message !== 'object') return null;
+  if (message.type === 'contacts') {
+    const contacts = Array.isArray(message.contacts) ? message.contacts.slice(0, 10).map((contact) => {
+      const phones = Array.isArray(contact?.phones) ? contact.phones.slice(0, 10).map((phone) => ({
+        phone: text(phone?.phone, 32), waId: text(phone?.wa_id, 32), type: text(phone?.type, 40),
+      })).filter((phone) => phone.phone || phone.waId) : [];
+      const emails = Array.isArray(contact?.emails) ? contact.emails.slice(0, 5).map((email) => text(email?.email, 254)).filter(Boolean) : [];
+      return { name: text(contact?.name?.formatted_name, 160) || text(contact?.name?.first_name, 80), phones, emails };
+    }).filter((contact) => contact.name || contact.phones.length || contact.emails.length) : [];
+    return contacts.length ? { contacts } : null;
+  }
+  if (message.type === 'location') {
+    const location = message.location || {};
+    const latitude = number(location.latitude);
+    const longitude = number(location.longitude);
+    if (latitude === undefined || longitude === undefined) return null;
+    return { location: { latitude, longitude, name: text(location.name, 160), address: text(location.address, 512) } };
+  }
+  if (message.type === 'order') {
+    const order = message.order || {};
+    const items = Array.isArray(order.product_items) ? order.product_items.slice(0, 100).map((item) => ({
+      retailerId: text(item?.product_retailer_id, 256), quantity: number(item?.quantity), itemPrice: number(item?.item_price), currency: text(item?.currency, 8),
+    })).filter((item) => item.retailerId || item.quantity !== undefined || item.itemPrice !== undefined) : [];
+    return items.length ? { order: { catalogId: text(order.catalog_id, 256), items } } : null;
+  }
+  if (message.type === 'button') {
+    const button = message.button || {};
+    return text(button.text, 1024) || text(button.payload, 1024) ? { button: { text: text(button.text, 1024), payload: text(button.payload, 1024) } } : null;
+  }
+  if (message.type === 'interactive') {
+    const interactive = message.interactive || {};
+    const reply = interactive.button_reply || interactive.list_reply;
+    if (reply) return { interactive: { kind: interactive.type === 'list_reply' ? 'list' : 'button', id: text(reply.id, 256), title: text(reply.title, 1024), description: text(reply.description, 1024) } };
+    if (interactive.nfm_reply) return { interactive: { kind: 'flow', name: text(interactive.nfm_reply.name, 256), body: text(interactive.nfm_reply.body, 2048), responseJson: text(interactive.nfm_reply.response_json, 8000) } };
+    return null;
+  }
+  if (message.type === 'system') {
+    const system = message.system || {};
+    return text(system.body, 2048) || text(system.type, 80) ? { system: { body: text(system.body, 2048), type: text(system.type, 80), newWaId: text(system.new_wa_id, 32) } } : null;
+  }
+  return null;
+};
 const referralFor = (message) => {
   const referral = message?.referral;
   if (!referral || typeof referral !== 'object' || Array.isArray(referral)) return null;
@@ -111,13 +166,13 @@ const saveMessage = async (organizationId, message, contactName) => {
     // can never be linked merely because of a malformed webhook payload.
     const repliedProviderMessageId = message.context?.id || null;
     const inserted = await client.query(`
-      INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, filename, status, provider_message_id, reply_to_message_id, referral)
+      INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, filename, status, provider_message_id, reply_to_message_id, referral, message_metadata)
       VALUES ($1, $2, 'inbound', $3, $4, $5, $6, 'received', $7,
         (SELECT id FROM messages WHERE organization_id=$1 AND conversation_id=$2 AND provider_message_id=$8),
-        $9::jsonb)
+        $9::jsonb, $10::jsonb)
       ON CONFLICT (provider_message_id) DO NOTHING
       RETURNING id
-    `, [organizationId, conversation.rows[0].id, message.type || 'unknown', textFor(message), mediaIdFor(message), filenameFor(message), message.id, repliedProviderMessageId, JSON.stringify(referralFor(message))]);
+    `, [organizationId, conversation.rows[0].id, message.type || 'unknown', textFor(message), mediaIdFor(message), filenameFor(message), message.id, repliedProviderMessageId, JSON.stringify(referralFor(message)), JSON.stringify(messageMetadataFor(message))]);
     const isMarketingReply = inserted.rowCount > 0
       && await marketingReply(client, organizationId, conversation.rows[0].id, repliedProviderMessageId);
     return { conversationId: conversation.rows[0].id, inserted: inserted.rowCount > 0, isMarketingReply };

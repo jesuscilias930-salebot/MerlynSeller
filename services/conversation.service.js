@@ -56,7 +56,7 @@ exports.list = async (organizationId, userId) => (await db.query(`
   ORDER BY c.updated_at DESC
 `, [organizationId, userId])).rows;
 exports.messages = async (organizationId, conversationId) => (await db.query(`
-  SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename, m.status, m.error_code, m.provider_message_id, m.referral, m.created_at,
+  SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename, m.status, m.error_code, m.provider_message_id, m.referral, m.message_metadata AS "messageMetadata", m.created_at,
     m.reply_to_message_id AS "replyToMessageId", replied.body AS "replyToBody", replied.type AS "replyToType", replied.direction AS "replyToDirection",
     COALESCE((
       SELECT json_agg(json_build_object('emoji', reaction.emoji, 'actorDirection', reaction.actor_direction) ORDER BY reaction.created_at)
