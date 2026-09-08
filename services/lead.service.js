@@ -20,6 +20,12 @@ const initialColumn = (client, organizationId) => client.query(
   [organizationId],
 );
 
+const normalizedColumnName = (value) => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[^a-zA-Z0-9]/g, '')
+  .toLowerCase();
+
 exports.initialColumnId = async (client, organizationId) => {
   const result = await initialColumn(client, organizationId);
   if (!result.rows[0]) {
@@ -213,12 +219,21 @@ exports.moveToAttention = async (organizationId, conversationId) => {
     'SELECT id, name FROM lead_columns WHERE organization_id=$1',
     [organizationId],
   );
-  const target = columns.rows.find((column) => String(column.name || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase() === 'requiere atencion');
+  const target = columns.rows.find((column) => normalizedColumnName(column.name) === 'requiereatencion');
   if (!target) return false;
+  await exports.move(organizationId, conversationId, { columnId: target.id });
+  return true;
+};
+
+// R-HOT is a commercial outcome, not an automation state: a customer who
+// answers a campaign or an approved template is explicitly showing renewed
+// interest and should be surfaced in the pipeline immediately.
+exports.moveToRemarketingHot = async (organizationId, conversationId) => {
+  const columns = await db.query('SELECT id, name FROM lead_columns WHERE organization_id=$1', [organizationId]);
+  const target = columns.rows.find((column) => normalizedColumnName(column.name) === 'rhot');
+  if (!target) return false;
+  const current = await db.query('SELECT lead_column_id FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]);
+  if (!current.rows[0] || current.rows[0].lead_column_id === target.id) return false;
   await exports.move(organizationId, conversationId, { columnId: target.id });
   return true;
 };
