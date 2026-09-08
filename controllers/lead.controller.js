@@ -23,3 +23,7 @@ exports.removeColumn = async (req, res, next) => {
 exports.move = async (req, res, next) => {
   try { return res.json(await leads.move(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); }
 };
+
+exports.moveAllFromColumn = async (req, res, next) => {
+  try { return res.json(await leads.moveAllFromColumn(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); }
+};

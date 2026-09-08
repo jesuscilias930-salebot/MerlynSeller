@@ -4,6 +4,7 @@ const realtime = require('../lib/realtime');
 
 const columnSchema = z.object({ name: z.string().trim().min(2).max(80) });
 const moveSchema = z.object({ columnId: z.string().uuid() });
+const bulkMoveSchema = z.object({ targetColumnId: z.string().uuid() });
 const reorderSchema = z.object({ columnIds: z.array(z.string().uuid()).min(1).max(100) });
 
 const validate = (schema, value) => {
@@ -173,6 +174,35 @@ exports.move = async (organizationId, conversationId, input) => {
   });
   await realtime.publish(organizationId, 'lead.moved', result.id);
   return result;
+};
+
+exports.moveAllFromColumn = async (organizationId, sourceColumnId, input) => {
+  const data = validate(bulkMoveSchema, input);
+  if (sourceColumnId === data.targetColumnId) {
+    const error = new Error('Elige una columna de destino distinta');
+    error.status = 400;
+    throw error;
+  }
+  const movedLeads = await db.transaction(async (client) => {
+    const columns = await client.query(
+      'SELECT id FROM lead_columns WHERE organization_id=$1 AND id = ANY($2::uuid[]) FOR UPDATE',
+      [organizationId, [sourceColumnId, data.targetColumnId]],
+    );
+    if (columns.rowCount !== 2) {
+      const error = new Error('La columna de origen o destino no fue encontrada');
+      error.status = 404;
+      throw error;
+    }
+    const moved = await client.query(
+      `UPDATE conversations
+       SET lead_column_id=$3, updated_at=now()
+       WHERE organization_id=$1 AND lead_column_id=$2`,
+      [organizationId, sourceColumnId, data.targetColumnId],
+    );
+    return moved.rowCount;
+  });
+  await realtime.publish(organizationId, 'lead.bulk_moved');
+  return { sourceColumnId, targetColumnId: data.targetColumnId, movedLeads };
 };
 
 // An unmatched customer message should be visible to a human. The column is

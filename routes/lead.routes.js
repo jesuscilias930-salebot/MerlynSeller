@@ -7,6 +7,7 @@ router.get('/board', controller.board);
 router.post('/columns', requireRole('owner', 'admin'), controller.addColumn);
 router.put('/columns/order', requireRole('owner', 'admin'), controller.reorderColumns);
 router.delete('/columns/:id', requireRole('owner', 'admin'), controller.removeColumn);
+router.patch('/columns/:id/move-leads', requireRole('owner', 'admin'), controller.moveAllFromColumn);
 router.patch('/:id/column', controller.move);
 
 module.exports = router;
