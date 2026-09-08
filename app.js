@@ -16,6 +16,7 @@ const automationRoutes = require('./routes/automation.routes');
 const scenarioRoutes = require('./routes/scenario.routes');
 const quickReplyRoutes = require('./routes/quick-reply.routes');
 const whatsappTemplateRoutes = require('./routes/whatsapp-template.routes');
+const shippingRoutes = require('./routes/shipping.routes');
 
 const realtime = require('./lib/realtime'); //Load the module to conect redis with the conexions SSE de la UI
 
@@ -36,7 +37,7 @@ app.use(cookieParser());
 // different domains. Reject browser requests from an unexpected Origin before
 // they can perform a session-based state change. Requests without an Origin
 // remain available for server-to-server integrations and Postman testing.
-const browserSessionPaths = ['/auth', '/conversations', '/settings', '/leads', '/remarketing', '/automations', '/scenarios', '/quick-replies', '/whatsapp-templates'];
+const browserSessionPaths = ['/auth', '/conversations', '/settings', '/leads', '/remarketing', '/automations', '/scenarios', '/quick-replies', '/whatsapp-templates', '/shipping'];
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 app.use((req, res, next) => {
   const isBrowserSessionRequest = browserSessionPaths.some((path) => req.path === path || req.path.startsWith(`${path}/`));
@@ -104,6 +105,7 @@ app.use('/automations', automationRoutes);
 app.use('/scenarios', scenarioRoutes);
 app.use('/quick-replies', quickReplyRoutes);
 app.use('/whatsapp-templates', whatsappTemplateRoutes);
+app.use('/shipping', shippingRoutes);
 realtime.start();
 
 app.use((err, req, res, next) => {
