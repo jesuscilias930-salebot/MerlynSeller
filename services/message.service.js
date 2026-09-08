@@ -304,7 +304,7 @@ exports.sendCtaUrl = async (input) => {
   };
   const header = optionalText(input.header, 'header', 60);
   const footer = optionalText(input.footer, 'footer', 60);
-  if (input.headerMediaId) interactive.header = { type: 'image', image: { id: requiredString(input.headerMediaId, 'headerMediaId', 256) } };
+  if (input.headerImageUrl) interactive.header = { type: 'image', image: { link: httpsUrl(input.headerImageUrl, 'headerImageUrl') } };
   else if (header) interactive.header = { type: 'text', text: header };
   if (footer) interactive.footer = { text: footer };
 

@@ -16,7 +16,7 @@ const documentSchema = z.object({
 });
 const ctaUrlSchema = z.object({
   header: z.string().trim().max(60).optional(),
-  headerMediaId: z.string().trim().min(1).max(256).optional(),
+  headerImageUrl: z.string().trim().url().max(2000).optional(),
   body: z.string().trim().min(1).max(1024),
   footer: z.string().trim().max(60).optional(),
   buttonText: z.string().trim().min(1).max(20),
@@ -138,9 +138,10 @@ exports.queueText = async (organizationId, conversationId, input) => {
 exports.queueCtaUrl = async (organizationId, conversationId, input) => {
   const data = validation(ctaUrlSchema, input);
   if (!/^https:\/\//i.test(data.url)) { const error = new Error('url must use HTTPS'); error.status = 400; throw error; }
+  if (data.headerImageUrl && !/^https:\/\//i.test(data.headerImageUrl)) { const error = new Error('La URL de la imagen del encabezado debe usar HTTPS.'); error.status = 400; throw error; }
   const result = await db.query(
     "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status) SELECT $1, id, 'outbound', 'interactive', $3, $4, 'pending' FROM conversations WHERE id=$2 AND organization_id=$1 RETURNING id",
-    [organizationId, conversationId, JSON.stringify(data), data.headerMediaId || null],
+    [organizationId, conversationId, JSON.stringify(data), null],
   );
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add('send-cta-url', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });

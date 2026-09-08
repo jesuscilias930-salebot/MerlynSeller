@@ -36,7 +36,7 @@ const send = (message) => message.type === 'document'
         : message.type === 'video'
           ? messageService.sendVideo({ to: message.phone_number, id: message.media_id })
           : message.type === 'interactive'
-            ? messageService.sendCtaUrl({ to: message.phone_number, ...JSON.parse(message.body || '{}'), headerMediaId: message.media_id || undefined })
+            ? messageService.sendCtaUrl({ to: message.phone_number, ...JSON.parse(message.body || '{}') })
             : messageService.sendText({ to: message.phone_number, body: message.body, replyToProviderMessageId: message.reply_to_provider_message_id || undefined });
 
 const releaseLock = (key, token) => outboundRedis.eval(
