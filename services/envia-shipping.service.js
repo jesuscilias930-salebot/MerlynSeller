@@ -6,6 +6,10 @@ const environments = {
   sandbox: 'https://api-test.envia.com',
   production: 'https://api.envia.com',
 };
+const queryEnvironments = {
+  sandbox: 'https://queries.test.envia.com',
+  production: 'https://queries.envia.com',
+};
 const addressSchema = z.object({
   name: z.string().trim().min(1).max(160),
   phone: z.string().trim().min(8).max(32),
@@ -38,7 +42,9 @@ const shippingInputSchema = z.object({
   saleExternalId: z.union([z.string().trim().min(1).max(120), z.number().int().positive()]).optional(),
   destination: addressSchema,
   packages: z.array(packageSchema).min(1).max(20),
-  carrier: z.string().trim().min(1).max(80),
+  // A carrier is required only when purchasing a selected label. Quotes can
+  // intentionally omit it so we compare every carrier enabled in Envia.
+  carrier: z.string().trim().min(1).max(80).optional(),
   service: z.string().trim().min(1).max(120).optional(),
   type: z.union([z.literal(1), z.literal(2), z.literal(3)]).default(1),
   settings: z.object({ printFormat: z.string().trim().max(20).optional(), printSize: z.string().trim().max(20).optional(), currency: z.string().trim().length(3).optional(), comments: z.string().trim().max(500).optional() }).optional(),
@@ -66,8 +72,9 @@ const request = async (environment, path, body, context = {}) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Number(process.env.ENVIA_REQUEST_TIMEOUT_MS || 15000));
   try {
-    const response = await fetch(`${environments[environment]}${path}`, {
-      method: 'POST', headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal,
+    const baseUrl = context.api === 'queries' ? queryEnvironments[environment] : environments[environment];
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: context.method || 'POST', headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: controller.signal,
     });
     const raw = await response.text();
     let data; try { data = raw ? JSON.parse(raw) : {}; } catch { data = { message: raw }; }
@@ -106,21 +113,39 @@ exports.saveSettings = async (organizationId, input) => {
 };
 const payloadFor = (settings, data, includePrintSettings) => ({
   origin: settings.origin, destination: data.destination, packages: data.packages,
-  shipment: { type: data.type, carrier: data.carrier, ...(data.service ? { service: data.service } : {}) },
+  shipment: { type: data.type, ...(data.carrier ? { carrier: data.carrier } : {}), ...(data.service ? { service: data.service } : {}) },
   settings: { ...(data.settings || {}), ...(includePrintSettings ? {} : {}) },
 });
+const carrierNames = (response) => {
+  const candidates = Array.isArray(response?.data) ? response.data : (Array.isArray(response) ? response : []);
+  return [...new Set(candidates.map((carrier) => typeof carrier === 'string' ? carrier : carrier?.name).filter(Boolean))].slice(0, 30);
+};
+const ratesFrom = (response) => Array.isArray(response?.data) ? response.data : [];
 exports.quote = async (organizationId, input) => {
   const data = parse(shippingInputSchema, input);
   const settings = await currentSettings(organizationId);
   if (!settings.origin?.name) throw fail(400, 'Configura primero la dirección de origen de Envia');
-  const response = await request(settings.environment, '/ship/rate/', payloadFor(settings, data, false), { organizationId, carrier: data.carrier, service: data.service, destinationCountry: data.destination.country, destinationPostalCode: data.destination.postalCode, packageCount: data.packages.length });
-  const rates = Array.isArray(response.data) ? response.data : [];
-  console.log(JSON.stringify({ level: 'info', message: 'Envia quote completed', organizationId, environment: settings.environment, carrier: data.carrier, rateCount: rates.length }));
-  return { environment: settings.environment, rates, raw: response };
+  if (data.carrier) {
+    const response = await request(settings.environment, '/ship/rate/', payloadFor(settings, data, false), { organizationId, carrier: data.carrier, service: data.service, destinationCountry: data.destination.country, destinationPostalCode: data.destination.postalCode, packageCount: data.packages.length });
+    const rates = ratesFrom(response);
+    console.log(JSON.stringify({ level: 'info', message: 'Envia quote completed', organizationId, environment: settings.environment, carrier: data.carrier, rateCount: rates.length }));
+    return { environment: settings.environment, rates, raw: response };
+  }
+
+  // Envia documents the rate endpoint as one carrier per request. Discover the
+  // enabled carriers first, then request each quote in parallel and merge them.
+  const carriersResponse = await request(settings.environment, `/carrier?country_code=${encodeURIComponent(data.destination.country)}`, undefined, { organizationId, api: 'queries', method: 'GET', destinationCountry: data.destination.country });
+  const carriers = carrierNames(carriersResponse);
+  if (!carriers.length) throw fail(422, `Envia no tiene paqueterías activas para ${data.destination.country}`);
+  const results = await Promise.allSettled(carriers.map((carrier) => request(settings.environment, '/ship/rate/', payloadFor(settings, { ...data, carrier }, false), { organizationId, carrier, service: data.service, destinationCountry: data.destination.country, destinationPostalCode: data.destination.postalCode, packageCount: data.packages.length })));
+  const rates = results.flatMap((result) => result.status === 'fulfilled' ? ratesFrom(result.value) : []);
+  const unavailableCarriers = carriers.filter((carrier, index) => results[index]?.status === 'rejected');
+  console.log(JSON.stringify({ level: 'info', message: 'Envia all-carrier quote completed', organizationId, environment: settings.environment, carrierCount: carriers.length, rateCount: rates.length, unavailableCarrierCount: unavailableCarriers.length }));
+  return { environment: settings.environment, rates, carriers, unavailableCarriers };
 };
 exports.generate = async (organizationId, input) => {
   const data = parse(shippingInputSchema, input);
-  if (!data.service) throw fail(400, 'Selecciona un servicio de envío antes de generar la guía');
+  if (!data.carrier || !data.service) throw fail(400, 'Selecciona una paquetería y un servicio antes de generar la guía');
   const settings = await currentSettings(organizationId);
   if (!settings.origin?.name) throw fail(400, 'Configura primero la dirección de origen de Envia');
   const printSettings = { ...(data.settings || {}), printFormat: data.settings?.printFormat || 'PDF', printSize: data.settings?.printSize || 'STOCK_4X6' };
