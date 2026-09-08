@@ -21,4 +21,8 @@ router.get('/stickers', requireUser, controller.listStickers);
 router.get('/stickers/:id/media', requireUser, controller.stickerMedia);
 router.post('/stickers/upload', requireUser, requireRole('owner', 'admin'), require('express').raw({ type: isWebp, limit: '500kb' }), controller.uploadSticker);
 router.delete('/stickers/:id', requireUser, requireRole('owner', 'admin'), controller.deleteSticker);
+router.get('/cta-url-templates', requireUser, controller.listCtaUrlTemplates);
+router.post('/cta-url-templates', requireUser, requireRole('owner', 'admin'), controller.createCtaUrlTemplate);
+router.patch('/cta-url-templates/:id', requireUser, requireRole('owner', 'admin'), controller.updateCtaUrlTemplate);
+router.delete('/cta-url-templates/:id', requireUser, requireRole('owner', 'admin'), controller.deleteCtaUrlTemplate);
 module.exports = router;

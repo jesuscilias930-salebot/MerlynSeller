@@ -248,3 +248,60 @@ exports.stickerMedia = async (req, res, next) => {
   try { const result = await db.query('SELECT media_id FROM saved_stickers WHERE id=$1 AND organization_id=$2', [req.params.id, req.auth.organizationId]); if (!result.rows[0]) return res.status(404).json({ error: 'Sticker not found' }); const media = await messageService.downloadMedia(result.rows[0].media_id); res.set({ 'Content-Type': media.contentType, 'Cache-Control': 'private, max-age=300' }); return res.send(media.buffer); }
   catch (error) { return next(error); }
 };
+
+const ctaUrlTemplateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  header: z.string().trim().max(60).nullable().optional(),
+  headerImageUrl: z.string().trim().url().max(2000).nullable().optional(),
+  body: z.string().trim().min(1).max(1024),
+  footer: z.string().trim().max(60).nullable().optional(),
+  buttonText: z.string().trim().min(1).max(20),
+  url: z.string().trim().url().max(2000),
+});
+
+const ctaTemplateResponse = (row) => ({
+  id: row.id, name: row.name, header: row.header, headerImageUrl: row.header_image_url,
+  body: row.body, footer: row.footer, buttonText: row.button_text, url: row.url,
+  created_at: row.created_at, updated_at: row.updated_at,
+});
+
+const validateCtaUrlTemplate = (input) => {
+  const parsed = ctaUrlTemplateSchema.safeParse(input);
+  if (!parsed.success) { const error = new Error(parsed.error.issues[0].message); error.status = 400; throw error; }
+  if (!/^https:\/\//i.test(parsed.data.url) || (parsed.data.headerImageUrl && !/^https:\/\//i.test(parsed.data.headerImageUrl))) {
+    const error = new Error('Las URLs deben usar HTTPS.'); error.status = 400; throw error;
+  }
+  return parsed.data;
+};
+
+exports.listCtaUrlTemplates = async (req, res, next) => {
+  try {
+    const result = await db.query('SELECT * FROM cta_url_templates WHERE organization_id=$1 ORDER BY updated_at DESC', [req.auth.organizationId]);
+    return res.json(result.rows.map(ctaTemplateResponse));
+  } catch (error) { return next(error); }
+};
+
+exports.createCtaUrlTemplate = async (req, res, next) => {
+  try {
+    const value = validateCtaUrlTemplate(req.body);
+    const result = await db.query(`INSERT INTO cta_url_templates (organization_id,name,header,header_image_url,body,footer,button_text,url) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`, [req.auth.organizationId, value.name, value.header || null, value.headerImageUrl || null, value.body, value.footer || null, value.buttonText, value.url]);
+    return res.status(201).json(ctaTemplateResponse(result.rows[0]));
+  } catch (error) { return next(error); }
+};
+
+exports.updateCtaUrlTemplate = async (req, res, next) => {
+  try {
+    const value = validateCtaUrlTemplate(req.body);
+    const result = await db.query(`UPDATE cta_url_templates SET name=$3,header=$4,header_image_url=$5,body=$6,footer=$7,button_text=$8,url=$9,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING *`, [req.params.id, req.auth.organizationId, value.name, value.header || null, value.headerImageUrl || null, value.body, value.footer || null, value.buttonText, value.url]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Invitación no encontrada.' });
+    return res.json(ctaTemplateResponse(result.rows[0]));
+  } catch (error) { return next(error); }
+};
+
+exports.deleteCtaUrlTemplate = async (req, res, next) => {
+  try {
+    const result = await db.query('DELETE FROM cta_url_templates WHERE id=$1 AND organization_id=$2 RETURNING id', [req.params.id, req.auth.organizationId]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Invitación no encontrada.' });
+    return res.status(204).end();
+  } catch (error) { return next(error); }
+};
