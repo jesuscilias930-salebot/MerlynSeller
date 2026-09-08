@@ -140,6 +140,13 @@ exports.quote = async (organizationId, input) => {
   const results = await Promise.allSettled(carriers.map((carrier) => request(settings.environment, '/ship/rate/', payloadFor(settings, { ...data, carrier }, false), { organizationId, carrier, service: data.service, destinationCountry: data.destination.country, destinationPostalCode: data.destination.postalCode, packageCount: data.packages.length })));
   const rates = results.flatMap((result) => result.status === 'fulfilled' ? ratesFrom(result.value) : []);
   const unavailableCarriers = carriers.filter((carrier, index) => results[index]?.status === 'rejected');
+  const emptyRateCarriers = carriers.filter((carrier, index) => results[index]?.status === 'fulfilled' && !ratesFrom(results[index].value).length);
+  if (!rates.length) console.warn(JSON.stringify({
+    level: 'warn', message: 'Envia all-carrier quote returned no rates', organizationId, environment: settings.environment,
+    carrierCount: carriers.length, emptyRateCarriers, unavailableCarriers, destinationCountry: data.destination.country,
+    destinationPostalCode: data.destination.postalCode, originCountry: settings.origin.country, originPostalCode: settings.origin.postalCode,
+    originState: settings.origin.state, destinationState: data.destination.state,
+  }));
   console.log(JSON.stringify({ level: 'info', message: 'Envia all-carrier quote completed', organizationId, environment: settings.environment, carrierCount: carriers.length, rateCount: rates.length, unavailableCarrierCount: unavailableCarriers.length }));
   return { environment: settings.environment, rates, carriers, unavailableCarriers };
 };
