@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const { randomUUID } = require('crypto');
 const db = require('../lib/db');
 
 const environments = {
@@ -47,22 +48,42 @@ const fail = (status, message) => { const error = new Error(message); error.stat
 const parse = (schema, input) => { const result = schema.safeParse(input); if (!result.success) throw fail(400, result.error.issues[0].message); return result.data; };
 
 const token = () => {
-  if (!process.env.ENVIA_TOKEN) throw fail(503, 'Envia no está configurado. Agrega ENVIA_TOKEN al entorno del backend.');
+  if (!process.env.ENVIA_TOKEN) {
+    console.warn(JSON.stringify({ level: 'warn', message: 'Envia request blocked: ENVIA_TOKEN is missing' }));
+    throw fail(503, 'Envia no está configurado. Agrega ENVIA_TOKEN al entorno del backend.');
+  }
   return process.env.ENVIA_TOKEN;
 };
-const request = async (environment, path, body) => {
+const request = async (environment, path, body, context = {}) => {
+  const requestId = randomUUID();
+  const apiToken = token();
+  console.log(JSON.stringify({
+    level: 'info', message: 'Envia API request started', requestId, environment, path,
+    organizationId: context.organizationId, carrier: context.carrier, service: context.service || null,
+    destinationCountry: context.destinationCountry, destinationPostalCode: context.destinationPostalCode,
+    packageCount: context.packageCount, tokenConfigured: Boolean(apiToken),
+  }));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Number(process.env.ENVIA_REQUEST_TIMEOUT_MS || 15000));
   try {
     const response = await fetch(`${environments[environment]}${path}`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token()}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal,
+      method: 'POST', headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal,
     });
     const raw = await response.text();
     let data; try { data = raw ? JSON.parse(raw) : {}; } catch { data = { message: raw }; }
-    if (!response.ok) throw fail(response.status >= 400 && response.status < 500 ? response.status : 502, data.message || data.error || 'Envia no pudo procesar la solicitud');
+    if (!response.ok) {
+      const detail = String(data.message || data.error || 'Envia no pudo procesar la solicitud').slice(0, 500);
+      console.warn(JSON.stringify({ level: 'warn', message: 'Envia API request rejected', requestId, environment, path, status: response.status, detail }));
+      throw fail(response.status >= 400 && response.status < 500 ? response.status : 502, detail);
+    }
+    console.log(JSON.stringify({ level: 'info', message: 'Envia API request completed', requestId, environment, path, status: response.status }));
     return data;
   } catch (error) {
-    if (error.name === 'AbortError') throw fail(504, 'Envia tardó demasiado en responder');
+    if (error.name === 'AbortError') {
+      console.warn(JSON.stringify({ level: 'warn', message: 'Envia API request timed out', requestId, environment, path }));
+      throw fail(504, 'Envia tardó demasiado en responder');
+    }
+    if (!error.status) console.error(JSON.stringify({ level: 'error', message: 'Envia API request failed before response', requestId, environment, path, errorType: error.name, errorMessage: String(error.message || 'Unknown error').slice(0, 500) }));
     throw error;
   } finally { clearTimeout(timeout); }
 };
@@ -80,6 +101,7 @@ exports.saveSettings = async (organizationId, input) => {
     VALUES ($1,$2,$3::jsonb,$4::jsonb)
     ON CONFLICT (organization_id) DO UPDATE SET environment=EXCLUDED.environment, origin=EXCLUDED.origin, default_package=EXCLUDED.default_package, updated_at=now()
     RETURNING environment, origin, default_package AS "defaultPackage"`, [organizationId, environment, JSON.stringify(data.origin), JSON.stringify(data.defaultPackage || current.defaultPackage || {})]);
+  console.log(JSON.stringify({ level: 'info', message: 'Envia shipping settings saved', organizationId, environment, originCountry: data.origin.country, originPostalCode: data.origin.postalCode, tokenConfigured: Boolean(process.env.ENVIA_TOKEN) }));
   return { ...result.rows[0], tokenConfigured: Boolean(process.env.ENVIA_TOKEN) };
 };
 const payloadFor = (settings, data, includePrintSettings) => ({
@@ -91,8 +113,10 @@ exports.quote = async (organizationId, input) => {
   const data = parse(shippingInputSchema, input);
   const settings = await currentSettings(organizationId);
   if (!settings.origin?.name) throw fail(400, 'Configura primero la dirección de origen de Envia');
-  const response = await request(settings.environment, '/ship/rate/', payloadFor(settings, data, false));
-  return { environment: settings.environment, rates: Array.isArray(response.data) ? response.data : [], raw: response };
+  const response = await request(settings.environment, '/ship/rate/', payloadFor(settings, data, false), { organizationId, carrier: data.carrier, service: data.service, destinationCountry: data.destination.country, destinationPostalCode: data.destination.postalCode, packageCount: data.packages.length });
+  const rates = Array.isArray(response.data) ? response.data : [];
+  console.log(JSON.stringify({ level: 'info', message: 'Envia quote completed', organizationId, environment: settings.environment, carrier: data.carrier, rateCount: rates.length }));
+  return { environment: settings.environment, rates, raw: response };
 };
 exports.generate = async (organizationId, input) => {
   const data = parse(shippingInputSchema, input);
@@ -100,7 +124,7 @@ exports.generate = async (organizationId, input) => {
   const settings = await currentSettings(organizationId);
   if (!settings.origin?.name) throw fail(400, 'Configura primero la dirección de origen de Envia');
   const printSettings = { ...(data.settings || {}), printFormat: data.settings?.printFormat || 'PDF', printSize: data.settings?.printSize || 'STOCK_4X6' };
-  const response = await request(settings.environment, '/ship/generate/', payloadFor(settings, { ...data, settings: printSettings }, true));
+  const response = await request(settings.environment, '/ship/generate/', payloadFor(settings, { ...data, settings: printSettings }, true), { organizationId, carrier: data.carrier, service: data.service, destinationCountry: data.destination.country, destinationPostalCode: data.destination.postalCode, packageCount: data.packages.length });
   const created = Array.isArray(response.data) ? response.data[0] : (response.data || response);
   const trackingNumber = created?.tracking_number || created?.trackingNumber || created?.track_number || null;
   const labelUrl = created?.label || created?.label_url || created?.labelUrl || null;
@@ -108,6 +132,7 @@ exports.generate = async (organizationId, input) => {
     VALUES ($1,$2,$3,$4,$5,$6,$7,'created',NULL,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb)
     RETURNING id, conversation_id AS "conversationId", sale_external_id AS "saleExternalId", carrier, service, tracking_number AS "trackingNumber", label_url AS "labelUrl", shipment_status AS status, price, currency, created_at AS "createdAt"`,
   [organizationId, data.conversationId || null, data.saleExternalId ? String(data.saleExternalId) : null, data.carrier, data.service, trackingNumber, labelUrl, created?.totalPrice || created?.price || null, created?.currency || data.settings?.currency || null, JSON.stringify(settings.origin), JSON.stringify(data.destination), JSON.stringify(data.packages), JSON.stringify(response)]);
+  console.log(JSON.stringify({ level: 'info', message: 'Envia shipping label stored', organizationId, shipmentId: result.rows[0].id, carrier: data.carrier, service: data.service, trackingNumber: trackingNumber || null }));
   return result.rows[0];
 };
 exports.list = async (organizationId, conversationId) => (await db.query(`SELECT id, conversation_id AS "conversationId", sale_external_id AS "saleExternalId", carrier, service, tracking_number AS "trackingNumber", label_url AS "labelUrl", shipment_status AS status, status_description AS "statusDescription", price, currency, destination, created_at AS "createdAt", updated_at AS "updatedAt" FROM shipments WHERE organization_id=$1 AND ($2::uuid IS NULL OR conversation_id=$2) ORDER BY created_at DESC`, [organizationId, conversationId || null])).rows;
