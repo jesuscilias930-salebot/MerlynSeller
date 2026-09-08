@@ -316,3 +316,24 @@ exports.sendCtaUrl = async (input) => {
     interactive,
   });
 };
+
+exports.sendTemplate = async (input) => {
+  const components = Array.isArray(input.components) ? input.components : [];
+  for (const component of components) {
+    if (!['body', 'header'].includes(component.type) || !Array.isArray(component.parameters)) {
+      throw new MessageError(400, 'Invalid template components');
+    }
+    for (const parameter of component.parameters) {
+      if (parameter?.type !== 'text') throw new MessageError(400, 'Only text template parameters are supported');
+      requiredString(parameter.text, 'template parameter', 1024);
+    }
+  }
+  return send({
+    messaging_product: 'whatsapp', recipient_type: 'individual', to: recipient(input.to), type: 'template',
+    template: {
+      name: requiredString(input.templateName, 'templateName', 512),
+      language: { code: requiredString(input.language, 'language', 32) },
+      ...(components.length ? { components } : {}),
+    },
+  });
+};

@@ -22,6 +22,7 @@ router.get('/:id/document-options', controller.documentOptions);
 router.get('/:id/messages/:messageId/media', controller.media);
 router.post('/:id/messages/text', controller.sendText);
 router.post('/:id/messages/cta-url', controller.sendCtaUrl);
+router.post('/:id/messages/template', controller.sendTemplate);
 router.post('/:id/messages/document', controller.sendDocument);
 router.post('/:id/messages/entrepreneur-packages', controller.sendEntrepreneurPackages);
 router.post('/:id/messages/sticker', controller.sendSavedSticker);

@@ -22,6 +22,10 @@ const ctaUrlSchema = z.object({
   buttonText: z.string().trim().min(1).max(20),
   url: z.string().trim().url().max(2000),
 });
+const templateMessageSchema = z.object({
+  templateId: z.string().uuid(),
+  manualValues: z.record(z.string(), z.string().trim().max(1024)).optional(),
+});
 
 const validation = (schema, value) => {
   const parsed = schema.safeParse(value);
@@ -146,6 +150,20 @@ exports.queueCtaUrl = async (organizationId, conversationId, input) => {
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add('send-cta-url', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
   return { id: result.rows[0].id, status: 'pending', type: 'interactive' };
+};
+
+exports.queueTemplate = async (organizationId, conversationId, input) => {
+  const data = validation(templateMessageSchema, input);
+  const templates = require('./whatsapp-template.service');
+  const resolved = await templates.resolveForConversation(organizationId, conversationId, data.templateId, data.manualValues || {});
+  const payload = { templateName: resolved.template.name, language: resolved.template.language, components: resolved.components, templateId: resolved.template.id };
+  const result = await db.query(
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, status) SELECT $1, id, 'outbound', 'template', $3, 'pending' FROM conversations WHERE id=$2 AND organization_id=$1 RETURNING id",
+    [organizationId, conversationId, JSON.stringify(payload)],
+  );
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  await outboundQueue().add('send-template', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
+  return { id: result.rows[0].id, status: 'pending', type: 'template' };
 };
 
 exports.queueDocument = async (organizationId, conversationId, input) => {
