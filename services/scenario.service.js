@@ -64,6 +64,20 @@ const branchSchema = z.object({
   examples: z.array(z.string().trim().min(1).max(240)).min(1).max(30),
   nextStepId: z.string().trim().min(1).max(80),
 });
+const budgetOptionSchema = z
+  .object({
+    id: z.string().trim().min(1).max(80),
+    label: z.string().trim().min(1).max(120),
+    min: z.number().min(0).optional(),
+    max: z.number().min(0).optional(),
+    examples: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
+    packageIds: z.array(z.string().uuid()).min(1).max(20),
+    recommendationBody: z.string().trim().min(1).max(4096),
+  })
+  .refine(
+    (option) => option.min == null || option.max == null || option.min <= option.max,
+    "The minimum budget cannot exceed the maximum budget",
+  );
 const stepSchema = z.object({
   id: z
     .string()
@@ -76,6 +90,7 @@ const stepSchema = z.object({
     "send_catalog",
     "send_media",
     "wait_reply",
+    "budget_recommendation",
     "move_column",
     "end",
   ]),
@@ -96,6 +111,7 @@ const stepSchema = z.object({
     .max(20)
     .optional(),
   branches: z.array(branchSchema).max(20).optional(),
+  budgetOptions: z.array(budgetOptionSchema).min(1).max(10).optional(),
   fallbackStepId: z.string().trim().min(1).max(80).optional(),
   nextStepId: z.string().trim().min(1).max(80).optional(),
   columnId: z.string().uuid().optional().or(z.literal("")),
@@ -128,6 +144,16 @@ const scenarioSchema = z
         ctx.addIssue({
           code: "custom",
           message: `Step ${index + 1} needs at least one answer branch`,
+        });
+      if (step.type === "budget_recommendation" && !step.budgetOptions?.length)
+        ctx.addIssue({
+          code: "custom",
+          message: `Step ${index + 1} needs at least one budget option`,
+        });
+      if (step.type === "budget_recommendation" && !step.nextStepId)
+        ctx.addIssue({
+          code: "custom",
+          message: `Step ${index + 1} needs a next step after the recommendation`,
         });
     }
     const references = value.steps
@@ -446,6 +472,74 @@ const sendClarification = async (organizationId, conversationId, step) => conver
   body: step.fallbackBody.trim(),
 });
 
+const amountFromText = (text) => {
+  const match = String(text || "").match(/\d[\d.,]*/);
+  if (!match) return null;
+  const compact = match[0].replace(/[.,]/g, "");
+  const amount = Number(compact);
+  return Number.isFinite(amount) ? amount : null;
+};
+const budgetOptionForReply = (text, options) => {
+  const normalized = normalize(text);
+  const scored = options
+    .map((option) => ({
+      option,
+      value: score(normalized, [option.label, ...(option.examples || [])]),
+    }))
+    .sort((left, right) => right.value - left.value);
+  if (scored[0]?.value >= 0.65) return scored[0].option;
+  const amount = amountFromText(text);
+  if (amount == null) return null;
+  return (
+    options.find(
+      (option) =>
+        (option.min == null || amount >= option.min) &&
+        (option.max == null || amount <= option.max),
+    ) || null
+  );
+};
+const interpolateRecommendation = (body, option, packages) => {
+  const names = packages.map((item) => item.name).join(", ");
+  return body
+    .replaceAll("{{package_name}}", packages[0]?.name || "paquete emprendedor")
+    .replaceAll("{{package_names}}", names || "paquetes emprendedores")
+    .replaceAll("{{budget}}", option.label);
+};
+const sendBudgetRecommendation = async (
+  organizationId,
+  conversationId,
+  option,
+) => {
+  const rows = (
+    await db.query(
+      `SELECT package.id,package.name,COUNT(image.id)::integer AS "imageCount"
+       FROM entrepreneur_packages package
+       LEFT JOIN entrepreneur_package_images image ON image.package_id=package.id
+       WHERE package.organization_id=$1 AND package.id = ANY($2::uuid[])
+       GROUP BY package.id,package.name`,
+      [organizationId, option.packageIds],
+    )
+  ).rows;
+  const byId = new Map(rows.map((item) => [item.id, item]));
+  if (byId.size !== option.packageIds.length) {
+    const error = new Error("A package configured in this budget option no longer exists");
+    error.status = 400;
+    throw error;
+  }
+  const packages = option.packageIds.map((id) => byId.get(id));
+  if (packages.some((item) => !item.imageCount)) {
+    const error = new Error("Every package in a budget recommendation needs at least one photo");
+    error.status = 400;
+    throw error;
+  }
+  await conversations.queueText(organizationId, conversationId, {
+    body: interpolateRecommendation(option.recommendationBody, option, packages),
+  });
+  await conversations.queueEntrepreneurPackages(organizationId, conversationId, {
+    packageIds: option.packageIds,
+  });
+};
+
 const run = async (
   organizationId,
   conversationId,
@@ -466,7 +560,7 @@ const run = async (
     error.status = 400;
     throw error;
   }
-  if (step.type === "wait_reply") {
+  if (step.type === "wait_reply" || step.type === "budget_recommendation") {
     await setCurrentStep(organizationId, conversationId, scenario.key, step.id);
     return;
   }
@@ -541,11 +635,30 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
   if (state) {
     const scenario = active.find((item) => item.key === state.scenario_key);
     const step = scenario && byId(scenario, state.step);
-    if (!scenario || !step || step.type !== "wait_reply") return { handled: false, requiresHuman: false };
+    if (!scenario || !step || !["wait_reply", "budget_recommendation"].includes(step.type)) return { handled: false, requiresHuman: false };
     if (newStart && newStart.key !== scenario.key && newStart.canInterrupt) {
       await complete(organizationId, conversationId);
       await run(organizationId, conversationId, newStart, newStart.steps[0].id);
       log("info", "Conversation scenario replaced", { from: scenario.key, to: newStart.key });
+      return { handled: true, requiresHuman: false };
+    }
+
+    if (step.type === "budget_recommendation") {
+      const option = budgetOptionForReply(incoming, step.budgetOptions || []);
+      if (!option) {
+        if (step.fallbackBody?.trim()) {
+          await sendClarification(organizationId, conversationId, step);
+          return { handled: true, requiresHuman: false };
+        }
+        return { handled: false, requiresHuman: true };
+      }
+      await sendBudgetRecommendation(organizationId, conversationId, option);
+      await run(organizationId, conversationId, scenario, step.nextStepId);
+      log("info", "Conversation scenario budget recommendation sent", {
+        scenario: scenario.key,
+        step: step.id,
+        option: option.id,
+      });
       return { handled: true, requiresHuman: false };
     }
 
