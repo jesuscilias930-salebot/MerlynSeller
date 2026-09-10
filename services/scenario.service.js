@@ -71,12 +71,22 @@ const budgetOptionSchema = z
     min: z.number().min(0).optional(),
     max: z.number().min(0).optional(),
     examples: z.array(z.string().trim().min(1).max(240)).max(20).optional(),
-    packageIds: z.array(z.string().uuid()).min(1).max(20),
+    packageIds: z.array(z.string().uuid()).max(20).optional(),
+    items: z.array(z.object({
+      mediaId: z.string().trim().min(1).max(256),
+      filename: z.string().max(240).optional(),
+      caption: z.string().max(1024).optional(),
+      type: z.literal("image").optional(),
+    })).max(50).optional(),
     recommendationBody: z.string().trim().min(1).max(4096),
   })
   .refine(
     (option) => option.min == null || option.max == null || option.min <= option.max,
     "The minimum budget cannot exceed the maximum budget",
+  )
+  .refine(
+    (option) => Boolean(option.packageIds?.length || option.items?.length),
+    "Select at least one package or photo for the budget recommendation",
   );
 const stepSchema = z.object({
   id: z
@@ -111,7 +121,7 @@ const stepSchema = z.object({
     .max(20)
     .optional(),
   branches: z.array(branchSchema).max(20).optional(),
-  budgetOptions: z.array(budgetOptionSchema).min(1).max(10).optional(),
+  budgetOptions: z.array(budgetOptionSchema).min(1).max(50).optional(),
   fallbackStepId: z.string().trim().min(1).max(80).optional(),
   nextStepId: z.string().trim().min(1).max(80).optional(),
   columnId: z.string().uuid().optional().or(z.literal("")),
@@ -510,6 +520,7 @@ const sendBudgetRecommendation = async (
   conversationId,
   option,
 ) => {
+  const packageIds = option.packageIds || [];
   const rows = (
     await db.query(
       `SELECT package.id,package.name,COUNT(image.id)::integer AS "imageCount"
@@ -517,16 +528,16 @@ const sendBudgetRecommendation = async (
        LEFT JOIN entrepreneur_package_images image ON image.package_id=package.id
        WHERE package.organization_id=$1 AND package.id = ANY($2::uuid[])
        GROUP BY package.id,package.name`,
-      [organizationId, option.packageIds],
+      [organizationId, packageIds],
     )
   ).rows;
   const byId = new Map(rows.map((item) => [item.id, item]));
-  if (byId.size !== option.packageIds.length) {
+  if (byId.size !== packageIds.length) {
     const error = new Error("A package configured in this budget option no longer exists");
     error.status = 400;
     throw error;
   }
-  const packages = option.packageIds.map((id) => byId.get(id));
+  const packages = packageIds.map((id) => byId.get(id));
   if (packages.some((item) => !item.imageCount)) {
     const error = new Error("Every package in a budget recommendation needs at least one photo");
     error.status = 400;
@@ -535,9 +546,18 @@ const sendBudgetRecommendation = async (
   await conversations.queueText(organizationId, conversationId, {
     body: interpolateRecommendation(option.recommendationBody, option, packages),
   });
-  await conversations.queueEntrepreneurPackages(organizationId, conversationId, {
-    packageIds: option.packageIds,
-  });
+  if (packageIds.length)
+    await conversations.queueEntrepreneurPackages(organizationId, conversationId, {
+      packageIds,
+    });
+  for (const item of option.items || [])
+    await conversations.queueExistingMedia(
+      organizationId,
+      conversationId,
+      "image",
+      item.mediaId,
+      item.caption,
+    );
 };
 
 const run = async (
