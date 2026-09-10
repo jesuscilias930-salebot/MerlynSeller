@@ -21,6 +21,7 @@ const pendingMessage = async (conversationId) => (await db.query(`
   WHERE m.conversation_id = $1
     AND m.direction = 'outbound'
     AND m.status = 'pending'
+    AND m.deleted_at IS NULL
   ORDER BY m.outbound_sequence ASC NULLS LAST, m.created_at ASC, m.id ASC
   LIMIT 1
 `, [conversationId])).rows[0];

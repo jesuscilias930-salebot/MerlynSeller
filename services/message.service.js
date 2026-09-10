@@ -290,6 +290,28 @@ exports.sendAttachment = async (input) => {
   return send({ messaging_product: 'whatsapp', recipient_type: 'individual', to: recipient(input.to), type, [type]: attachment });
 };
 
+exports.deleteMessage = async (messageId) => {
+  const { accessToken, phoneNumberId, version } = graphConfig();
+  const id = requiredString(messageId, 'messageId', 256);
+  let response;
+  try {
+    const url = new URL(`https://graph.facebook.com/${version}/${phoneNumberId}/messages`);
+    url.searchParams.set('message_id', id);
+    response = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(Number(process.env.WHATSAPP_REQUEST_TIMEOUT_MS || 10000)),
+    });
+  } catch (error) {
+    throw new MessageError(502, 'Unable to reach Meta');
+  }
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.success !== true) {
+    throw new MessageError(response.status >= 500 ? 502 : 400, 'Meta could not delete the message', metaError(body));
+  }
+  return { deleted: true };
+};
+
 exports.sendCtaUrl = async (input) => {
   const interactive = {
     type: 'cta_url',

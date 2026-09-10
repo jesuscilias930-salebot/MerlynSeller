@@ -55,8 +55,9 @@ exports.list = async (organizationId, userId) => (await db.query(`
   WHERE c.organization_id = $1
   ORDER BY c.updated_at DESC
 `, [organizationId, userId])).rows;
-exports.messages = async (organizationId, conversationId) => (await db.query(`
+exports.messages = async (organizationId, conversationId, userId) => (await db.query(`
   SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename, m.status, m.error_code, m.provider_message_id, m.referral, m.message_metadata AS "messageMetadata", m.created_at,
+    (m.deleted_at IS NOT NULL) AS "deletedForEveryone",
     m.reply_to_message_id AS "replyToMessageId", replied.body AS "replyToBody", replied.type AS "replyToType", replied.direction AS "replyToDirection",
     COALESCE((
       SELECT json_agg(json_build_object('emoji', reaction.emoji, 'actorDirection', reaction.actor_direction) ORDER BY reaction.created_at)
@@ -68,8 +69,48 @@ exports.messages = async (organizationId, conversationId) => (await db.query(`
   FROM messages m
   LEFT JOIN messages replied ON replied.id = m.reply_to_message_id
   WHERE m.organization_id = $1 AND m.conversation_id = $2
+    AND NOT EXISTS (SELECT 1 FROM message_user_deletions hidden WHERE hidden.message_id=m.id AND hidden.user_id=$3)
   ORDER BY m.created_at ASC
-`, [organizationId, conversationId])).rows;
+`, [organizationId, conversationId, userId])).rows;
+
+exports.deleteMessage = async (organizationId, conversationId, userId, messageId, scope) => {
+  const data = validation(z.object({ scope: z.enum(['for_me', 'for_everyone']) }), { scope });
+  const message = (await db.query(
+    `SELECT id,direction,status,provider_message_id AS "providerMessageId",deleted_at AS "deletedAt"
+     FROM messages WHERE id=$1 AND organization_id=$2 AND conversation_id=$3`,
+    [messageId, organizationId, conversationId],
+  )).rows[0];
+  if (!message) { const error = new Error('Message not found'); error.status = 404; throw error; }
+  if (data.scope === 'for_me') {
+    await db.query(
+      `INSERT INTO message_user_deletions (message_id,user_id) VALUES ($1,$2)
+       ON CONFLICT (message_id,user_id) DO NOTHING`,
+      [messageId, userId],
+    );
+    return { scope: data.scope, deleted: true };
+  }
+  if (message.direction !== 'outbound') {
+    const error = new Error('Solo los mensajes enviados por tu negocio se pueden eliminar para todos');
+    error.status = 400;
+    throw error;
+  }
+  if (message.deletedAt) return { scope: data.scope, deleted: true };
+  if (message.status !== 'pending') {
+    if (!message.providerMessageId) {
+      const error = new Error('El mensaje todavía no está disponible para eliminarse en WhatsApp');
+      error.status = 400;
+      throw error;
+    }
+    await messageService.deleteMessage(message.providerMessageId);
+  }
+  await db.query(
+    `UPDATE messages SET deleted_at=now(),deleted_by_user_id=$4,status=CASE WHEN status='pending' THEN 'deleted' ELSE status END,updated_at=now()
+     WHERE id=$1 AND organization_id=$2 AND conversation_id=$3`,
+    [messageId, organizationId, conversationId, userId],
+  );
+  await realtime.publish(organizationId, 'message.deleted', conversationId);
+  return { scope: data.scope, deleted: true };
+};
 
 exports.reactToMessage = async (organizationId, conversationId, messageId, input) => {
   const data = validation(reactionSchema, input);
@@ -232,8 +273,8 @@ exports.queueDocument = async (organizationId, conversationId, input) => {
 exports.queueUploadedDocument = async (organizationId, conversationId, input) => {
   const uploaded = await messageService.uploadMedia(input);
   const result = await db.query(
-    "INSERT INTO messages (organization_id, conversation_id, direction, type, media_id, filename, status) SELECT $1, id, 'outbound', 'document', $3, $4, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
-    [organizationId, conversationId, uploaded.mediaId, uploaded.filename],
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, filename, status) SELECT $1, id, 'outbound', 'document', $3, $4, $5, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
+    [organizationId, conversationId, input.caption || null, uploaded.mediaId, uploaded.filename],
   );
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add('send-document', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
@@ -260,8 +301,8 @@ exports.queueMedia = async (organizationId, conversationId, type, input) => {
   const media = type === 'video' ? await messageService.prepareVideo(input) : input;
   const uploaded = await messageService.uploadMedia(media);
   const result = await db.query(
-    "INSERT INTO messages (organization_id, conversation_id, direction, type, media_id, status) SELECT $1, id, 'outbound', $3, $4, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
-    [organizationId, conversationId, type, uploaded.mediaId],
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status) SELECT $1, id, 'outbound', $3, $4, $5, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
+    [organizationId, conversationId, type, input.caption || null, uploaded.mediaId],
   );
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add(`send-${type}`, { messageId: result.rows[0].id }, { jobId: result.rows[0].id });

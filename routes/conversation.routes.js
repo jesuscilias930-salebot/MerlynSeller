@@ -13,6 +13,7 @@ router.get('/', controller.list);
 router.post('/', controller.create);
 router.delete('/:id', controller.remove);
 router.get('/:id/messages', controller.messages);
+router.delete('/:id/messages/:messageId', controller.deleteMessage);
 router.post('/:id/messages/:messageId/learn-intent', controller.learnIntent);
 router.post('/:id/messages/:messageId/reaction', controller.react);
 router.post('/:id/read', controller.markRead);
