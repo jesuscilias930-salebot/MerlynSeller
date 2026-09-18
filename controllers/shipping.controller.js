@@ -1,4 +1,6 @@
 const shipping = require('../services/envia-shipping.service');
+exports.storeSettings = async (req, res, next) => { try { return res.json(await shipping.getStoreSettings(req.auth.organizationId)); } catch (error) { return handle(error, res, next); } };
+exports.saveStoreSettings = async (req, res, next) => { try { return res.json(await shipping.saveStoreSettings(req.auth.organizationId, req.body)); } catch (error) { return handle(error, res, next); } };
 const handle = (error, res, next) => {
   if (error.status) {
     console.warn(JSON.stringify({ level: 'warn', message: 'Envia shipping endpoint returned an expected error', path: res.req?.path, status: error.status, errorMessage: String(error.message || '').slice(0, 500) }));

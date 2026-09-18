@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const { randomUUID } = require('crypto');
 const db = require('../lib/db');
+const features = require('./integration-features.service');
 
 const environments = {
   sandbox: 'https://api-test.envia.com',
@@ -47,6 +48,7 @@ const savedPackageSchema = z.object({
   package: packageSchema,
 });
 const shippingInputSchema = z.object({
+  environment: z.enum(['sandbox', 'production']).optional(),
   conversationId: z.string().uuid().optional(),
   saleExternalId: z.union([z.string().trim().min(1).max(120), z.number().int().positive()]).optional(),
   destination: addressSchema,
@@ -62,16 +64,17 @@ const shippingInputSchema = z.object({
 const fail = (status, message) => { const error = new Error(message); error.status = status; return error; };
 const parse = (schema, input) => { const result = schema.safeParse(input); if (!result.success) throw fail(400, result.error.issues[0].message); return result.data; };
 
-const token = () => {
-  if (!process.env.ENVIA_TOKEN) {
+const token = (environment) => {
+  const value = features.enviaToken(environment);
+  if (!value) {
     console.warn(JSON.stringify({ level: 'warn', message: 'Envia request blocked: ENVIA_TOKEN is missing' }));
-    throw fail(503, 'Envia no está configurado. Agrega ENVIA_TOKEN al entorno del backend.');
+    throw fail(503, 'Configura el token de Envia para este ambiente en el backend.');
   }
-  return process.env.ENVIA_TOKEN;
+  return value;
 };
 const request = async (environment, path, body, context = {}) => {
   const requestId = randomUUID();
-  const apiToken = token();
+  const apiToken = token(environment);
   console.log(JSON.stringify({
     level: 'info', message: 'Envia API request started', requestId, environment, path,
     organizationId: context.organizationId, carrier: context.carrier, service: context.service || null,
@@ -106,19 +109,41 @@ const request = async (environment, path, body, context = {}) => {
 
 const currentSettings = async (organizationId) => {
   const result = await db.query('SELECT environment, origin, default_package AS "defaultPackage" FROM envia_shipping_settings WHERE organization_id=$1', [organizationId]);
-  return result.rows[0] || { environment: 'sandbox', origin: {}, defaultPackage: {} };
+  return { origin: {}, defaultPackage: {}, ...result.rows[0], environment: (await features.get(organizationId)).envia };
 };
-exports.getSettings = async (organizationId) => ({ ...(await currentSettings(organizationId)), tokenConfigured: Boolean(process.env.ENVIA_TOKEN) });
+exports.getStoreSettings = async (organizationId) => {
+  const result = await db.query('SELECT environment, origin, updated_at AS "updatedAt" FROM store_shipping_settings WHERE organization_id=$1', [organizationId]);
+  return { origin: {}, ...result.rows[0], environment: (await features.get(organizationId)).envia, configured: Boolean(result.rows[0]), isCheckoutOrganization: organizationId === process.env.STORE_ORGANIZATION_ID };
+};
+exports.saveStoreSettings = async (organizationId, input) => {
+  const data = parse(z.object({ environment: z.enum(['sandbox', 'production']), origin: addressSchema }), input);
+  if (data.origin.country === 'MX') {
+    const { localities } = await require('./envia-postal.service').lookup(data.origin.postalCode);
+    const locality = localities.find(x => x.stateCode === data.origin.state && x.city === data.origin.city && x.districts.includes(data.origin.district));
+    if (!locality) throw fail(400, 'Selecciona estado, ciudad y colonia correspondientes al código postal del origen.');
+  }
+  await db.query(`INSERT INTO store_shipping_settings (organization_id, environment, origin)
+    VALUES ($1,$2,$3::jsonb) ON CONFLICT (organization_id) DO UPDATE
+    SET environment=EXCLUDED.environment, origin=EXCLUDED.origin, updated_at=now()`,
+  [organizationId, data.environment, JSON.stringify(data.origin)]);
+  return exports.getStoreSettings(organizationId);
+};
+exports.quoteStore = async (organizationId, input) => {
+  const settings = await exports.getStoreSettings(organizationId);
+  if (!settings.configured) throw fail(400, 'Configura el origen de la tienda en Envíos antes de cotizar desde el carrito.');
+  return exports.quote(organizationId, input, settings);
+};
+exports.getSettings = async (organizationId) => { const settings = await currentSettings(organizationId); return { ...settings, tokenConfigured: Boolean(features.enviaToken(settings.environment)) }; };
 exports.saveSettings = async (organizationId, input) => {
   const data = parse(settingsSchema, input);
   const current = await currentSettings(organizationId);
-  const environment = data.environment || current.environment;
+  const environment = current.environment;
   const result = await db.query(`INSERT INTO envia_shipping_settings (organization_id, environment, origin, default_package)
     VALUES ($1,$2,$3::jsonb,$4::jsonb)
     ON CONFLICT (organization_id) DO UPDATE SET environment=EXCLUDED.environment, origin=EXCLUDED.origin, default_package=EXCLUDED.default_package, updated_at=now()
     RETURNING environment, origin, default_package AS "defaultPackage"`, [organizationId, environment, JSON.stringify(data.origin), JSON.stringify(data.defaultPackage || current.defaultPackage || {})]);
   console.log(JSON.stringify({ level: 'info', message: 'Envia shipping settings saved', organizationId, environment, originCountry: data.origin.country, originPostalCode: data.origin.postalCode, tokenConfigured: Boolean(process.env.ENVIA_TOKEN) }));
-  return { ...result.rows[0], tokenConfigured: Boolean(process.env.ENVIA_TOKEN) };
+  return { ...result.rows[0], tokenConfigured: Boolean(features.enviaToken(environment)) };
 };
 exports.listSaved = async (organizationId) => {
   const [addresses, packages] = await Promise.all([
@@ -188,9 +213,9 @@ const generatedShipmentFrom = (response) => {
     responseKeys: Object.keys(record).slice(0, 25),
   };
 };
-exports.quote = async (organizationId, input) => {
+exports.quote = async (organizationId, input, storeSettings) => {
   const data = parse(shippingInputSchema, input);
-  const settings = await currentSettings(organizationId);
+  const settings = storeSettings || await currentSettings(organizationId);
   if (!settings.origin?.name) throw fail(400, 'Configura primero la dirección de origen de Envia');
   if (data.carrier) {
     const response = await request(settings.environment, '/ship/rate/', payloadFor(settings, data, false), { organizationId, carrier: data.carrier, service: data.service, destinationCountry: data.destination.country, destinationPostalCode: data.destination.postalCode, packageCount: data.packages.length });
@@ -225,6 +250,7 @@ exports.generate = async (organizationId, input) => {
     if (!conversation.rows[0]) throw fail(404, 'La conversación seleccionada no pertenece a esta organización');
   }
   const settings = await currentSettings(organizationId);
+  if (data.environment !== settings.environment) throw fail(409, 'El ambiente cambió o falta confirmarlo. Vuelve a cotizar antes de generar una guía.');
   if (!settings.origin?.name) throw fail(400, 'Configura primero la dirección de origen de Envia');
   const printSettings = { ...(data.settings || {}), printFormat: data.settings?.printFormat || 'PDF', printSize: data.settings?.printSize || 'STOCK_4X6' };
   const response = await request(settings.environment, '/ship/generate/', payloadFor(settings, { ...data, settings: printSettings }, true), { organizationId, carrier: data.carrier, service: data.service, destinationCountry: data.destination.country, destinationPostalCode: data.destination.postalCode, packageCount: data.packages.length });

@@ -2,10 +2,10 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: merlynsales
-      POSTGRES_USER: merlynsales
-      POSTGRES_PASSWORD: 179ceb294d5bb9f7bf7e352aa21b025b8d250aee662fa806
-    ports: ["5432:5432"]
+      POSTGRES_DB: merlyn_crm_dev
+      POSTGRES_USER: merlyn_dev
+      POSTGRES_PASSWORD: merlyn_local_dev_2026
+    ports: ["5433:5432"]
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./db/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
