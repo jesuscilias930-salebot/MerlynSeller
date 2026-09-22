@@ -5,8 +5,8 @@ exports.enviaToken = environment => {
   return process.env.ENVIA_TOKEN_SANDBOX || process.env.ENVIA_TOKEN || '';
 };
 exports.get = async organizationId => {
-  const { rows } = await db.query('SELECT envia_environment AS envia, stripe_environment AS stripe FROM integration_features WHERE organization_id=$1', [organizationId]);
-  return rows[0] || { envia: 'sandbox', stripe: 'sandbox' };
+  const { rows } = await db.query('SELECT envia_environment AS envia, stripe_environment AS stripe, card_payments_enabled AS "cardPaymentsEnabled" FROM integration_features WHERE organization_id=$1', [organizationId]);
+  return rows[0] || { envia: 'sandbox', stripe: 'sandbox', cardPaymentsEnabled: true };
 };
 exports.stripeReadiness = async () => {
   const url = new URL(process.env.SOCK_CONTROL_URL || 'http://localhost:8080');
@@ -21,6 +21,13 @@ exports.stripeReadiness = async () => {
   } catch { throw fail(503, 'No se pudo verificar Stripe en SockControl. Revisa su URL, conexión y secreto interno.'); }
 };
 exports.save = async (organizationId, input) => {
+  if (input?.service === 'cardPayments') {
+    if (typeof input.enabled !== 'boolean') throw fail(400, 'Indica si los pagos con tarjeta están habilitados');
+    await db.query(`INSERT INTO integration_features (organization_id, card_payments_enabled) VALUES ($1,$2)
+      ON CONFLICT (organization_id) DO UPDATE SET card_payments_enabled=EXCLUDED.card_payments_enabled, updated_at=now()`, [organizationId, input.enabled]);
+    console.info(JSON.stringify({ level: 'info', message: 'Store card payments changed', organizationId, enabled: input.enabled }));
+    return exports.get(organizationId);
+  }
   const { service, environment, confirmProduction } = input || {};
   if (!['envia', 'stripe'].includes(service) || !['sandbox', 'production'].includes(environment)) throw fail(400, 'Selecciona un servicio y ambiente válidos');
   if (environment === 'production' && confirmProduction !== true) throw fail(400, 'Confirma el uso de producción');

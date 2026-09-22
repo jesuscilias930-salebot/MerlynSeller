@@ -4,8 +4,34 @@ const db = require('../lib/db');
 const features = require('../services/integration-features.service');
 test('modes default to sandbox; credentials never appear in settings', async () => {
   const original = db.query; db.query = async () => ({ rows: [] });
-  try { assert.deepEqual(await features.get('org'), { envia: 'sandbox', stripe: 'sandbox' }); }
+  try { assert.deepEqual(await features.get('org'), { envia: 'sandbox', stripe: 'sandbox', cardPaymentsEnabled: true }); }
   finally { db.query = original; }
+});
+test('card payments accepts only explicit booleans', async () => {
+  for (const enabled of [undefined, null, 'false', 0, 1]) {
+    await assert.rejects(features.save('org', { service: 'cardPayments', enabled }), { status: 400 });
+  }
+});
+test('card payment toggle persists independently without checking Stripe credentials', async () => {
+  const original = db.query, readiness = features.stripeReadiness;
+  let stored = true;
+  features.stripeReadiness = async () => { throw Error('Must not query credentials'); };
+  db.query = async (sql, args) => {
+    assert.equal(args[0], 'org');
+    if (sql.startsWith('INSERT')) {
+      assert.match(sql, /card_payments_enabled/);
+      assert.doesNotMatch(sql, /stripe_environment|envia_environment/);
+      stored = args[1];
+    }
+    return { rows: [{ envia: 'production', stripe: 'sandbox', cardPaymentsEnabled: stored }] };
+  };
+  try {
+    for (const enabled of [false, true]) {
+      assert.deepEqual(await features.save('org', { service: 'cardPayments', enabled }), {
+        envia: 'production', stripe: 'sandbox', cardPaymentsEnabled: enabled,
+      });
+    }
+  } finally { db.query = original; features.stripeReadiness = readiness; }
 });
 test('production Envia never falls back to legacy/test credentials', () => {
   const old = { ...process.env };
