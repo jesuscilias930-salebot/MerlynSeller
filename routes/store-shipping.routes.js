@@ -4,8 +4,8 @@ const shipping = require('../services/envia-shipping.service');
 
 // Server-to-server only. Fixed organization; callers cannot choose another tenant,
 // override origin/environment or purchase labels through this bridge.
-let minute = 0;
-let count = 0;
+let inFlight = 0;
+const MAX_CONCURRENT_QUOTES = 8;
 router.get('/features', async (req, res, next) => {
   res.set('Cache-Control', 'no-store');
   const expected = process.env.STORE_SHIPPING_SECRET || '';
@@ -20,9 +20,10 @@ router.post('/quote', async (req, res) => {
   const org = process.env.STORE_ORGANIZATION_ID;
   if (expected.length < 32 || !org) return res.status(503).json({ error: 'Shipping bridge is not configured' });
   if (req.get('Origin') || Buffer.byteLength(expected) !== Buffer.byteLength(provided) || !timingSafeEqual(Buffer.from(expected), Buffer.from(provided))) return res.sendStatus(401);
-  const current = Math.floor(Date.now() / 60000);
-  if (minute !== current) { minute = current; count = 0; }
-  if (++count > 30) return res.status(429).set('Retry-After', '60').json({ error: 'Too many quotes' });
+  // Per-visitor shared rate limits are enforced by SockControl. Protect upstream
+  // capacity separately; a burst must not consume a whole minute for every buyer.
+  if (inFlight >= MAX_CONCURRENT_QUOTES) return res.status(429).set('Retry-After', '3').json({error:'Cotizaciones ocupadas; reintenta en unos segundos'});
+  inFlight++;
   try {
     const result = await shipping.quoteStore(org, { destination: req.body?.destination, packages: req.body?.packages, settings: { currency: 'MXN' } });
     const rates = result.rates.filter(r => typeof r.carrier === 'string' && typeof r.service === 'string' && r.currency === 'MXN' && Number.isFinite(Number(r.totalPrice)) && Number(r.totalPrice) > 0).map(r => ({
@@ -34,6 +35,6 @@ router.post('/quote', async (req, res) => {
   } catch (error) {
     console.warn(JSON.stringify({ level: 'warn', message: 'Store shipping quote failed', status: error.status || 502 }));
     return res.status(502).json({ error: 'No se pudo consultar Envia.com' });
-  }
+  } finally { inFlight--; }
 });
 module.exports = router;
