@@ -2,9 +2,21 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const db = require('../lib/db');
 const features = require('../services/integration-features.service');
+test('Meta toggle persists only its boolean and never changes payment or shipping modes', async () => {
+  const original=db.query;let stored=false;
+  db.query=async(sql,args)=>{
+    assert.equal(args[0],'org');
+    if(sql.startsWith('INSERT')){assert.match(sql,/meta_events_enabled/);assert.doesNotMatch(sql,/card_payments_enabled|stripe_environment|envia_environment/);stored=args[1];}
+    return {rows:[{metaEventsEnabled:stored,cardPaymentsEnabled:true,stripe:'production',envia:'sandbox'}]};
+  };
+  try{
+    for(const enabled of [true,false]){const result=await features.save('org',{service:'metaEvents',enabled});assert.equal(result.metaEventsEnabled,enabled);assert.equal(result.stripe,'production');}
+    for(const enabled of [null,undefined,'true',1])await assert.rejects(features.save('org',{service:'metaEvents',enabled}),{status:400});
+  }finally{db.query=original;}
+});
 test('modes default to sandbox; credentials never appear in settings', async () => {
   const original = db.query; db.query = async () => ({ rows: [] });
-  try { assert.deepEqual(await features.get('org'), { envia: 'sandbox', stripe: 'sandbox', cardPaymentsEnabled: true }); }
+  try { assert.deepEqual(await features.get('org'), { envia: 'sandbox', stripe: 'sandbox', cardPaymentsEnabled: true, metaEventsEnabled: false }); }
   finally { db.query = original; }
 });
 test('card payments accepts only explicit booleans', async () => {
