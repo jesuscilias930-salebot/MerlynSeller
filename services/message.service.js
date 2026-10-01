@@ -205,12 +205,12 @@ exports.prepareAudio = async ({ buffer, contentType, filename }) => {
   throw new MessageError(400, 'Unsupported audio format');
 };
 
-exports.prepareVideo = async ({ buffer, contentType, filename }) => {
+exports.prepareVideo = async ({ buffer, contentType, filename, videoUploadPath }) => {
   const normalizedType = String(contentType || '').toLowerCase();
   if (metaVideoTypes.has(normalizedType)) {
     requiredString(filename, 'filename', 240);
     try {
-      const converted = await require('./video-conversion').convertVideo(buffer);
+      const converted = await require('./video-conversion').convertVideo(buffer, videoUploadPath);
       return { buffer: converted, contentType: 'video/mp4', filename: 'video.mp4' };
     } catch (error) { throw new MessageError(error.status || 500, error.status ? error.message : 'No fue posible preparar el video.'); }
   }

@@ -41,7 +41,20 @@ test('video preparation converts to MP4, cleans files and reports failures', asy
   await assert.rejects(prepareVideo(input), { status: 503 });
   mode = 'ok';
   await assert.rejects(prepareVideo({ ...input, contentType: 'text/html' }), { status: 400 });
-  await assert.rejects(prepareVideo({ ...input, buffer: Buffer.alloc(16 * 1024 * 1024 + 1) }), { status: 413 });
+  const { tmpdir } = require('node:os');
+  const { join } = require('node:path');
+  const directory = await fs.mkdtemp(join(tmpdir(), 'video-test-'));
+  const upload = join(directory, 'iphone.mov');
+  try {
+    await fs.writeFile(upload, '');
+    await fs.truncate(upload, Math.ceil(180.8 * 1024 * 1024));
+    const large = await prepareVideo({ ...input, buffer: undefined, videoUploadPath: upload });
+    assert.equal(large.contentType, 'video/mp4');
+    assert.equal(inputPath, upload);
+    assert.ok(argsSeen.includes('1600k'));
+    await fs.truncate(upload, 250 * 1024 * 1024 + 1);
+    await assert.rejects(prepareVideo({ ...input, buffer: undefined, videoUploadPath: upload }), { status: 413 });
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
   const first = prepareVideo(input);
   await assert.rejects(prepareVideo(input), { status: 429 });
   await first;

@@ -129,9 +129,10 @@ const sendMedia = (type) => async (req, res, next) => {
         const contentType = (req.get('content-type') || '').split(';')[0];
         const filename = decodeURIComponent(req.get('x-upload-filename') || type);
         const caption = decodeURIComponent(req.get('x-message-caption') || '');
-        if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: `${type} file is required` });
+        if (!(type === 'video' && req.videoUploadPath) && (!Buffer.isBuffer(req.body) || req.body.length === 0)) return res.status(400).json({ error: `${type} file is required` });
         return res.status(202).json(await conversations.queueMedia(req.auth.organizationId, req.params.id, type, {
             buffer: req.body,
+            videoUploadPath: type === 'video' ? req.videoUploadPath : undefined,
             contentType,
             filename,
             caption: caption || undefined,
