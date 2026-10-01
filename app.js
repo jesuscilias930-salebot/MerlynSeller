@@ -30,6 +30,7 @@ app.listen(...)   // abrir el puerto y empezar a recibir solicitudes
 */
 
 app.disable('x-powered-by');
+app.use(require('./middleware/video-trace.middleware').videoTrace);
 app.use(cors({ origin: process.env.FRONTEND_ORIGIN || false, credentials: true }));
 app.use(cookieParser());
 

@@ -19,6 +19,7 @@ exports.videoUpload = (handler) => async (req, res, next) => {
   }
   if (busy) return res.status(429).json({ error: 'Hay un video subiendo o en preparación. Intenta nuevamente en unos momentos.' });
   busy = true;
+  req.videoLog?.('upload_started');
   let directory;
   try {
     directory = await mkdtemp(join(tmpdir(), 'merlyn-upload-'));
@@ -30,10 +31,12 @@ exports.videoUpload = (handler) => async (req, res, next) => {
       callback(null, chunk);
     } });
     await pipeline(req, limit, createWriteStream(path, { mode: 0o600 }));
+    req.videoLog?.('upload_received', { bytes: size });
     if (!size) return res.status(400).json({ error: 'Selecciona un video válido.' });
     req.videoUploadPath = path;
     await handler(req, res, next);
   } catch (error) {
+    req.videoLog?.('upload_failed', { errorType: error.name, code: error.code, status: error.status });
     if (!res.headersSent && !res.destroyed) {
       if (error.status) res.status(error.status).json({ error: error.message });
       else next(error);

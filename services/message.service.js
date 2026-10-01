@@ -205,14 +205,17 @@ exports.prepareAudio = async ({ buffer, contentType, filename }) => {
   throw new MessageError(400, 'Unsupported audio format');
 };
 
-exports.prepareVideo = async ({ buffer, contentType, filename, videoUploadPath }) => {
+exports.prepareVideo = async ({ buffer, contentType, filename, videoUploadPath, videoLog }) => {
   const normalizedType = String(contentType || '').toLowerCase();
   if (metaVideoTypes.has(normalizedType)) {
     requiredString(filename, 'filename', 240);
     try {
       const converted = await require('./video-conversion').convertVideo(buffer, videoUploadPath);
       return { buffer: converted, contentType: 'video/mp4', filename: 'video.mp4' };
-    } catch (error) { throw new MessageError(error.status || 500, error.status ? error.message : 'No fue posible preparar el video.'); }
+    } catch (error) {
+      videoLog?.('conversion_failed', { status: error.status || 500, errorType: error.name });
+      throw new MessageError(error.status || 500, error.status ? error.message : 'No fue posible preparar el video.');
+    }
   }
   throw new MessageError(400, 'Selecciona un video MP4, MOV, M4V o 3GPP.');
 };

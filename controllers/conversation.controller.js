@@ -133,6 +133,7 @@ const sendMedia = (type) => async (req, res, next) => {
         return res.status(202).json(await conversations.queueMedia(req.auth.organizationId, req.params.id, type, {
             buffer: req.body,
             videoUploadPath: type === 'video' ? req.videoUploadPath : undefined,
+            videoLog: type === 'video' ? req.videoLog : undefined,
             contentType,
             filename,
             caption: caption || undefined,
