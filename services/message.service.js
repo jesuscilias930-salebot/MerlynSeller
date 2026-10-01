@@ -70,7 +70,7 @@ const replyContext = (value) => value === undefined ? {} : {
 };
 
 const metaAudioTypes = new Set(['audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/opus']);
-const metaVideoTypes = new Set(['video/mp4', 'video/3gpp']);
+const metaVideoTypes = new Set(['video/mp4', 'video/3gpp', 'video/quicktime', 'video/x-m4v']);
 
 const convertWebmToOgg = (buffer) => new Promise((resolve, reject) => {
   const ffmpegProcess = spawn('ffmpeg', ['-i', 'pipe:0', '-vn', '-c:a', 'libopus', '-f', 'ogg', 'pipe:1'], {
@@ -208,9 +208,13 @@ exports.prepareAudio = async ({ buffer, contentType, filename }) => {
 exports.prepareVideo = async ({ buffer, contentType, filename }) => {
   const normalizedType = String(contentType || '').toLowerCase();
   if (metaVideoTypes.has(normalizedType)) {
-    return { buffer, contentType: normalizedType, filename: requiredString(filename, 'filename', 240) };
+    requiredString(filename, 'filename', 240);
+    try {
+      const converted = await require('./video-conversion').convertVideo(buffer);
+      return { buffer: converted, contentType: 'video/mp4', filename: 'video.mp4' };
+    } catch (error) { throw new MessageError(error.status || 500, error.status ? error.message : 'No fue posible preparar el video.'); }
   }
-  throw new MessageError(400, 'Unsupported video format. Upload an MP4 or 3GPP video');
+  throw new MessageError(400, 'Selecciona un video MP4, MOV, M4V o 3GPP.');
 };
 
 exports.downloadMedia = async (mediaId) => {
