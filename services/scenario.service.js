@@ -187,6 +187,7 @@ const parse = (input) => {
   error.status = 400;
   throw error;
 };
+exports.parseDefinition = parse;
 const toRow = (row) => ({
   ...row,
   triggerExamples: row.triggerExamples || [],

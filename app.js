@@ -104,6 +104,7 @@ app.use('/leads', leadRoutes);
 app.use('/remarketing', remarketingRoutes);
 app.use('/automations', automationRoutes);
 app.use('/scenarios', scenarioRoutes);
+app.use('/mcp/scenarios', require('./routes/scenario-mcp.routes'));
 app.use('/quick-replies', quickReplyRoutes);
 app.use('/whatsapp-templates', whatsappTemplateRoutes);
 app.use('/features', require('./routes/features.routes'));

@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },
-  "scripts": { "start": "node server.mjs", "login": "node login.mjs", "test": "node --test tests/*.test.mjs" },
+  "scripts": { "start": "node server.mjs", "login": "node login.mjs", "start:scenarios": "node scenario-server.mjs", "login:scenarios": "node scenario-login.mjs", "test": "node --test tests/*.test.mjs" },
   "dependencies": { "@modelcontextprotocol/sdk": "1.31.0", "zod": "4.4.3" }
 }
