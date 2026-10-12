@@ -38,7 +38,7 @@ app.use(cookieParser());
 // different domains. Reject browser requests from an unexpected Origin before
 // they can perform a session-based state change. Requests without an Origin
 // remain available for server-to-server integrations and Postman testing.
-const browserSessionPaths = ['/auth', '/conversations', '/settings', '/leads', '/remarketing', '/automations', '/scenarios', '/quick-replies', '/whatsapp-templates', '/shipping', '/features'];
+const browserSessionPaths = ['/auth', '/conversations', '/settings', '/leads', '/remarketing', '/automations', '/scenarios', '/quick-replies', '/whatsapp-templates', '/shipping', '/features', '/content-videos'];
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 app.use((req, res, next) => {
   const isBrowserSessionRequest = browserSessionPaths.some((path) => req.path === path || req.path.startsWith(`${path}/`));
@@ -109,6 +109,7 @@ app.use('/quick-replies', quickReplyRoutes);
 app.use('/whatsapp-templates', whatsappTemplateRoutes);
 app.use('/features', require('./routes/features.routes'));
 app.use('/shipping', shippingRoutes);
+app.use('/content-videos', require('./routes/content-video.routes'));
 app.use('/internal/store-shipping', require('./routes/store-shipping.routes'));
 app.use('/store-orders', require('./routes/store-orders.routes'));
 realtime.start();
