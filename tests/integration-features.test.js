@@ -16,8 +16,36 @@ test('Meta toggle persists only its boolean and never changes payment or shippin
 });
 test('modes default to sandbox; credentials never appear in settings', async () => {
   const original = db.query; db.query = async () => ({ rows: [] });
-  try { assert.deepEqual(await features.get('org'), { envia: 'sandbox', stripe: 'sandbox', cardPaymentsEnabled: true, metaEventsEnabled: false }); }
+  try { assert.deepEqual(await features.get('org'), { envia: 'sandbox', stripe: 'sandbox', cardPaymentsEnabled: true, metaEventsEnabled: false, whatsappButtonEnabled: false, whatsappNumber: '' }); }
   finally { db.query = original; }
+});
+test('WhatsApp button saves normalized destination and visibility atomically, scoped to organization', async () => {
+  const original = db.query;
+  let stored = {whatsappButtonEnabled:false,whatsappNumber:''};
+  db.query = async (sql,args) => {
+    assert.equal(args[0],'org');
+    if(sql.startsWith('INSERT')) {
+      assert.match(sql,/whatsapp_button_enabled/); assert.match(sql,/whatsapp_number/);
+      assert.doesNotMatch(sql,/stripe_environment|envia_environment|card_payments_enabled|meta_events_enabled/);
+      stored={whatsappButtonEnabled:args[1],whatsappNumber:args[2]};
+    }
+    return {rows:[{...stored,stripe:'production'}]};
+  };
+  try {
+    assert.equal((await features.save('org',{service:'whatsappButton',enabled:true,number:'+52 (272) 128-5563'})).whatsappNumber,'522721285563');
+    assert.equal((await features.save('org',{service:'whatsappButton',enabled:false,number:'522721285563'})).whatsappButtonEnabled,false);
+    assert.equal((await features.save('org',{service:'whatsappButton',enabled:false,number:''})).whatsappNumber,'');
+  } finally {db.query=original;}
+});
+test('WhatsApp rejects invalid destination and boolean before writing to database',async()=>{
+  const original=db.query;db.query=async()=>{throw Error('Must not write');};
+  try {
+    for(const number of ['', '123','0123456789','1'.repeat(16),'https://wa.me/522721285563','52abc2721285563','+52/2721285563','52\n2721285563'])
+      await assert.rejects(features.save('org',{service:'whatsappButton',enabled:true,number}),{status:400});
+    for(const enabled of ['true',1,null,undefined])
+      await assert.rejects(features.save('org',{service:'whatsappButton',enabled,number:'522721285563'}),{status:400});
+    await assert.rejects(features.save('org',{service:'whatsappButton',enabled:false,number:'---'}),{status:400});
+  } finally {db.query=original;}
 });
 test('card payments accepts only explicit booleans', async () => {
   for (const enabled of [undefined, null, 'false', 0, 1]) {

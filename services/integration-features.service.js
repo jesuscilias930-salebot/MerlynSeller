@@ -5,8 +5,8 @@ exports.enviaToken = environment => {
   return process.env.ENVIA_TOKEN_SANDBOX || process.env.ENVIA_TOKEN || '';
 };
 exports.get = async organizationId => {
-  const { rows } = await db.query('SELECT envia_environment AS envia, stripe_environment AS stripe, card_payments_enabled AS "cardPaymentsEnabled", meta_events_enabled AS "metaEventsEnabled" FROM integration_features WHERE organization_id=$1', [organizationId]);
-  return rows[0] || { envia: 'sandbox', stripe: 'sandbox', cardPaymentsEnabled: true, metaEventsEnabled: false };
+  const { rows } = await db.query('SELECT envia_environment AS envia, stripe_environment AS stripe, card_payments_enabled AS "cardPaymentsEnabled", meta_events_enabled AS "metaEventsEnabled", whatsapp_button_enabled AS "whatsappButtonEnabled", whatsapp_number AS "whatsappNumber" FROM integration_features WHERE organization_id=$1', [organizationId]);
+  return rows[0] || { envia: 'sandbox', stripe: 'sandbox', cardPaymentsEnabled: true, metaEventsEnabled: false, whatsappButtonEnabled: false, whatsappNumber: '' };
 };
 exports.stripeReadiness = async () => {
   const url = new URL(process.env.SOCK_CONTROL_URL || 'http://localhost:8080');
@@ -21,6 +21,18 @@ exports.stripeReadiness = async () => {
   } catch { throw fail(503, 'No se pudo verificar Stripe en SockControl. Revisa su URL, conexión y secreto interno.'); }
 };
 exports.save = async (organizationId, input) => {
+  if (input?.service === 'whatsappButton') {
+    if (typeof input.enabled !== 'boolean' || typeof input.number !== 'string') throw fail(400, 'Indica el estado y el número de WhatsApp');
+    const raw = input.number.trim();
+    if (raw.length > 40 || (raw && !/^\+?[\d ()-]+$/.test(raw))) throw fail(400, 'Escribe solo el número con lada de país, por ejemplo +52 272 128 5563');
+    const number = raw.replace(/[^\d]/g, '');
+    if ((raw || input.enabled) && !/^[1-9]\d{6,14}$/.test(number)) throw fail(400, 'El número debe incluir lada de país y tener entre 7 y 15 dígitos');
+    await db.query(`INSERT INTO integration_features (organization_id, whatsapp_button_enabled, whatsapp_number) VALUES ($1,$2,$3)
+      ON CONFLICT (organization_id) DO UPDATE SET whatsapp_button_enabled=EXCLUDED.whatsapp_button_enabled, whatsapp_number=EXCLUDED.whatsapp_number, updated_at=now()`, [organizationId, input.enabled, number]);
+    // The destination is merchant configuration, not a credential. Do not log the phone number.
+    console.info(JSON.stringify({ level: 'info', message: 'Store WhatsApp button changed', organizationId, enabled: input.enabled }));
+    return exports.get(organizationId);
+  }
   if (input?.service === 'metaEvents') {
     if (typeof input.enabled !== 'boolean') throw fail(400, 'Indica si los eventos de Meta están habilitados');
     await db.query(`INSERT INTO integration_features (organization_id, meta_events_enabled) VALUES ($1,$2)
