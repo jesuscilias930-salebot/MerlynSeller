@@ -25,4 +25,8 @@ router.get('/cta-url-templates', requireUser, controller.listCtaUrlTemplates);
 router.post('/cta-url-templates', requireUser, requireRole('owner', 'admin'), controller.createCtaUrlTemplate);
 router.patch('/cta-url-templates/:id', requireUser, requireRole('owner', 'admin'), controller.updateCtaUrlTemplate);
 router.delete('/cta-url-templates/:id', requireUser, requireRole('owner', 'admin'), controller.deleteCtaUrlTemplate);
+router.get('/option-templates', requireUser, controller.listOptionTemplates);
+router.post('/option-templates', requireUser, requireRole('owner', 'admin'), controller.createOptionTemplate);
+router.patch('/option-templates/:id', requireUser, requireRole('owner', 'admin'), controller.updateOptionTemplate);
+router.delete('/option-templates/:id', requireUser, requireRole('owner', 'admin'), controller.deleteOptionTemplate);
 module.exports = router;

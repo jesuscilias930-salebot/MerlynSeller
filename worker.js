@@ -26,6 +26,13 @@ const pendingMessage = async (conversationId) => (await db.query(`
   LIMIT 1
 `, [conversationId])).rows[0];
 
+const sendInteractive = (message) => {
+  const data = JSON.parse(message.body || '{}');
+  return data.kind === 'options'
+    ? messageService.sendInteractiveOptions({ ...data, to: message.phone_number })
+    : messageService.sendCtaUrl({ ...data, to: message.phone_number });
+};
+
 const send = (message) => message.type === 'document'
   ? messageService.sendAttachment({ to: message.phone_number, type: 'document', id: message.media_id, filename: message.filename || undefined, caption: message.body || undefined })
   : message.type === 'image'
@@ -37,7 +44,7 @@ const send = (message) => message.type === 'document'
         : message.type === 'video'
           ? messageService.sendVideo({ to: message.phone_number, id: message.media_id })
           : message.type === 'interactive'
-            ? messageService.sendCtaUrl({ to: message.phone_number, ...JSON.parse(message.body || '{}') })
+            ? sendInteractive(message)
             : message.type === 'template'
               ? messageService.sendTemplate({ to: message.phone_number, ...JSON.parse(message.body || '{}') })
             : messageService.sendText({ to: message.phone_number, body: message.body, replyToProviderMessageId: message.reply_to_provider_message_id || undefined });

@@ -305,3 +305,30 @@ exports.deleteCtaUrlTemplate = async (req, res, next) => {
     return res.status(204).end();
   } catch (error) { return next(error); }
 };
+
+const optionTemplates = require('../services/interactive-option-template.service');
+const optionTemplateId = (req, res) => {
+  if (z.string().uuid().safeParse(req.params.id).success) return true;
+  res.status(404).json({ error: 'Mensaje con opciones no encontrado.' });
+  return false;
+};
+const optionTemplateError = (error, res, next) => (error.status ? res.status(error.status).json({ error: error.message }) : next(error));
+
+exports.listOptionTemplates = async (req, res, next) => {
+  try { return res.json(await optionTemplates.list(req.auth.organizationId)); }
+  catch (error) { return optionTemplateError(error, res, next); }
+};
+exports.createOptionTemplate = async (req, res, next) => {
+  try { return res.status(201).json(await optionTemplates.create(req.auth.organizationId, req.body)); }
+  catch (error) { return optionTemplateError(error, res, next); }
+};
+exports.updateOptionTemplate = async (req, res, next) => {
+  if (!optionTemplateId(req, res)) return undefined;
+  try { return res.json(await optionTemplates.update(req.auth.organizationId, req.params.id, req.body)); }
+  catch (error) { return optionTemplateError(error, res, next); }
+};
+exports.deleteOptionTemplate = async (req, res, next) => {
+  if (!optionTemplateId(req, res)) return undefined;
+  try { await optionTemplates.remove(req.auth.organizationId, req.params.id); return res.status(204).end(); }
+  catch (error) { return optionTemplateError(error, res, next); }
+};

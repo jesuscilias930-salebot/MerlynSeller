@@ -3,6 +3,7 @@ const db = require('../lib/db');
 const { outboundQueue } = require('../lib/queue');
 const leads = require('./lead.service');
 const messageService = require('./message.service');
+const interactiveOptions = require('./interactive-options');
 const realtime = require('../lib/realtime');
 
 const phone = z.string().trim().transform((value) => value.replace(/^\+/, '')).refine((value) => /^\d{8,15}$/.test(value), 'phoneNumber must be E.164');
@@ -39,7 +40,8 @@ const validation = (schema, value) => {
 
 exports.list = async (organizationId, userId) => (await db.query(`
   SELECT c.id, c.contact_id AS "contactId", c.status, c.updated_at, c.auto_reply_enabled AS "autoReplyEnabled", c.scenario_enabled AS "scenarioEnabled", c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
-    latest.body AS last_message,
+    CASE WHEN latest.direction = 'outbound' AND latest.type = 'interactive' AND left(latest.body, 1) = '{'
+      THEN COALESCE(latest.body::jsonb->>'body', latest.body) ELSE latest.body END AS last_message,
     latest.direction AS "lastDirection",
     (c.status = 'open' AND latest.direction = 'inbound') AS "needsResponse",
     (SELECT COUNT(*)::int FROM messages m
@@ -50,7 +52,7 @@ exports.list = async (organizationId, userId) => (await db.query(`
   FROM conversations c
   JOIN contacts ct ON ct.id = c.contact_id
   LEFT JOIN LATERAL (
-    SELECT body, direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
+    SELECT body, direction, type FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
   ) latest ON true
   WHERE c.organization_id = $1
   ORDER BY c.updated_at DESC
@@ -243,6 +245,17 @@ exports.queueCtaUrl = async (organizationId, conversationId, input) => {
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add('send-cta-url', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
   return { id: result.rows[0].id, status: 'pending', type: 'interactive' };
+};
+
+exports.queueOptions = async (organizationId, conversationId, input) => {
+  const data = interactiveOptions.normalize(input);
+  const result = await db.query(
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, status) SELECT $1, id, 'outbound', 'interactive', $3, 'pending' FROM conversations WHERE id=$2 AND organization_id=$1 RETURNING id",
+    [organizationId, conversationId, JSON.stringify({ kind: 'options', ...data })],
+  );
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  await outboundQueue().add('send-options', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
+  return { id: result.rows[0].id, status: 'pending', type: 'interactive', format: data.format };
 };
 
 exports.queueTemplate = async (organizationId, conversationId, input) => {

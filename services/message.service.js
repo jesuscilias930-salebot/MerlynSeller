@@ -346,6 +346,17 @@ exports.sendCtaUrl = async (input) => {
   });
 };
 
+exports.sendInteractiveOptions = async (input) => send({
+  messaging_product: 'whatsapp',
+  recipient_type: 'individual',
+  to: recipient(input.to),
+  type: 'interactive',
+  interactive: (() => {
+    try { return require('./interactive-options').toInteractive(input); }
+    catch (error) { throw new MessageError(error.status || 400, error.message); }
+  })(),
+});
+
 exports.sendTemplate = async (input) => {
   const components = Array.isArray(input.components) ? input.components : [];
   for (const component of components) {
