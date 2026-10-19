@@ -2,6 +2,7 @@ const { z } = require("zod");
 const db = require("../lib/db");
 const conversations = require("./conversation.service");
 const messageService = require("./message.service");
+const interactiveOptions = require("./interactive-options");
 
 const normalize = (value) =>
   String(value || "")
@@ -100,6 +101,7 @@ const stepSchema = z.object({
     "send_catalog",
     "send_media",
     "wait_reply",
+    "send_options",
     "budget_recommendation",
     "move_column",
     "end",
@@ -125,6 +127,23 @@ const stepSchema = z.object({
   fallbackStepId: z.string().trim().min(1).max(80).optional(),
   nextStepId: z.string().trim().min(1).max(80).optional(),
   columnId: z.string().uuid().optional().or(z.literal("")),
+  // send_options: mensaje con botones/lista; cada opción puede continuar en un paso.
+  header: z.string().max(60).optional(),
+  footer: z.string().max(60).optional(),
+  format: z.enum(["auto", "buttons", "list"]).optional(),
+  buttonText: z.string().max(20).optional(),
+  sectionTitle: z.string().max(24).optional(),
+  options: z
+    .array(
+      z.object({
+        id: z.string().trim().max(200).optional(),
+        title: z.string().max(24),
+        description: z.string().max(72).optional(),
+        nextStepId: z.string().trim().min(1).max(80).optional(),
+      }),
+    )
+    .max(10)
+    .optional(),
 });
 const scenarioSchema = z
   .object({
@@ -155,6 +174,11 @@ const scenarioSchema = z
           code: "custom",
           message: `Step ${index + 1} needs at least one answer branch`,
         });
+      if (step.type === "send_options" && !step.options?.length)
+        ctx.addIssue({
+          code: "custom",
+          message: `Step ${index + 1} needs at least one option`,
+        });
       if (step.type === "budget_recommendation" && !step.budgetOptions?.length)
         ctx.addIssue({
           code: "custom",
@@ -171,6 +195,7 @@ const scenarioSchema = z
         step.nextStepId,
         step.fallbackStepId,
         ...(step.branches || []).map((branch) => branch.nextStepId),
+        ...(step.options || []).map((option) => option.nextStepId),
       ])
       .filter(Boolean);
     for (const id of references)
@@ -180,9 +205,51 @@ const scenarioSchema = z
           message: `Step reference not found: ${id}`,
         });
   });
+const optionMessage = (step) => ({
+  format: step.format || "auto",
+  header: step.header,
+  body: step.body,
+  footer: step.footer,
+  buttonText: step.buttonText,
+  sectionTitle: step.sectionTitle,
+  options: (step.options || []).map(({ id, title, description }) => ({ id, title, description })),
+});
+// Valida el mensaje con los mismos límites de WhatsApp que el chat y fija ids
+// estables por opción para reconocer la respuesta del cliente.
+const normalizeOptionsStep = (step, index) => {
+  let message;
+  try {
+    message = interactiveOptions.normalize(optionMessage(step));
+  } catch (cause) {
+    const error = new Error(`Paso ${index + 1} (${step.label}): ${cause.message}`);
+    error.status = 400;
+    throw error;
+  }
+  const normalized = {
+    ...step,
+    format: step.format || "auto",
+    body: message.body,
+    options: message.options.map((option, position) => ({
+      ...option,
+      ...(step.options[position].nextStepId ? { nextStepId: step.options[position].nextStepId } : {}),
+    })),
+  };
+  for (const key of ["header", "footer", "buttonText", "sectionTitle"]) {
+    const value = step[key]?.trim();
+    if (value) normalized[key] = value;
+    else delete normalized[key];
+  }
+  return normalized;
+};
 const parse = (input) => {
   const result = scenarioSchema.safeParse(input);
-  if (result.success) return result.data;
+  if (result.success)
+    return {
+      ...result.data,
+      steps: result.data.steps.map((step, index) =>
+        step.type === "send_options" ? normalizeOptionsStep(step, index) : step,
+      ),
+    };
   const error = new Error(result.error.issues[0].message);
   error.status = 400;
   throw error;
@@ -561,6 +628,40 @@ const sendBudgetRecommendation = async (
     );
 };
 
+// Una opción sin destino termina el escenario (el equipo continúa la conversación).
+const advance = (organizationId, conversationId, scenario, nextStepId) =>
+  nextStepId
+    ? run(organizationId, conversationId, scenario, nextStepId)
+    : complete(organizationId, conversationId);
+const optionBranches = (step) =>
+  (step.options || []).map((option) => ({
+    id: option.id,
+    name: option.title,
+    aiDescription: option.description,
+    examples: [option.title],
+    nextStepId: option.nextStepId,
+  }));
+// Reconoce la opción elegida: id exacto del botón/lista, texto idéntico o,
+// si la escribió, la opción más parecida sin empate.
+const optionForReply = (step, text, optionId) => {
+  const options = step.options || [];
+  if (optionId) {
+    const exact = options.find((option) => option.id === optionId);
+    if (exact) return exact;
+  }
+  const normalized = normalize(text);
+  if (!normalized) return null;
+  const same = options.find((option) => normalize(option.title) === normalized);
+  if (same) return same;
+  const ranked = options
+    .map((option) => ({ option, value: score(normalized, [option.title]) }))
+    .sort((left, right) => right.value - left.value);
+  return ranked[0]?.value >= 0.6 && ranked[0].value > (ranked[1]?.value || 0)
+    ? ranked[0].option
+    : null;
+};
+exports.optionForReply = optionForReply;
+
 const run = async (
   organizationId,
   conversationId,
@@ -582,6 +683,11 @@ const run = async (
     throw error;
   }
   if (step.type === "wait_reply" || step.type === "budget_recommendation") {
+    await setCurrentStep(organizationId, conversationId, scenario.key, step.id);
+    return;
+  }
+  if (step.type === "send_options") {
+    await conversations.queueOptions(organizationId, conversationId, optionMessage(step));
     await setCurrentStep(organizationId, conversationId, scenario.key, step.id);
     return;
   }
@@ -656,7 +762,15 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
   if (state) {
     const scenario = active.find((item) => item.key === state.scenario_key);
     const step = scenario && byId(scenario, state.step);
-    if (!scenario || !step || !["wait_reply", "budget_recommendation"].includes(step.type)) return { handled: false, requiresHuman: false };
+    if (!scenario || !step || !["wait_reply", "budget_recommendation", "send_options"].includes(step.type)) return { handled: false, requiresHuman: false };
+    if (step.type === "send_options") {
+      const option = optionForReply(step, incoming);
+      if (option) {
+        await advance(organizationId, conversationId, scenario, option.nextStepId);
+        log("info", "Conversation scenario option selected", { scenario: scenario.key, step: step.id, option: option.id, source: "text" });
+        return { handled: true, requiresHuman: false };
+      }
+    }
     if (newStart && newStart.key !== scenario.key && newStart.canInterrupt) {
       await complete(organizationId, conversationId);
       await run(organizationId, conversationId, newStart, newStart.steps[0].id);
@@ -683,17 +797,18 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
       return { handled: true, requiresHuman: false };
     }
 
-    const ranked = (step.branches || []).map((branch) => ({ branch, value: score(text, branch.examples) })).sort((a, b) => b.value - a.value);
+    const branches = step.type === "send_options" ? optionBranches(step) : step.branches || [];
+    const ranked = step.type === "send_options" ? [] : branches.map((branch) => ({ branch, value: score(text, branch.examples) })).sort((a, b) => b.value - a.value);
     const match = ranked[0]?.value >= 0.6 ? ranked[0].branch : null;
     if (match) {
       await run(organizationId, conversationId, scenario, match.nextStepId);
       log("info", "Conversation scenario advanced", { scenario: scenario.key, step: step.id, branch: match.id });
       return { handled: true, requiresHuman: false };
     }
-    const decision = await classifyUnmatchedReply(text, scenario, step);
-    const aiBranch = (step.branches || []).find((branch) => branch.id === decision.branchId);
+    const decision = await classifyUnmatchedReply(text, scenario, { ...step, branches });
+    const aiBranch = branches.find((branch) => branch.id === decision.branchId);
     if (decision.decision === "continue_branch" && decision.confidence >= 0.82 && aiBranch) {
-      await run(organizationId, conversationId, scenario, aiBranch.nextStepId);
+      await advance(organizationId, conversationId, scenario, aiBranch.nextStepId);
       log("info", "Conversation scenario AI branch selected", { scenario: scenario.key, step: step.id, branch: aiBranch.id, confidence: decision.confidence });
       return { handled: true, requiresHuman: false };
     }
@@ -719,4 +834,24 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
   await run(organizationId, conversationId, newStart, newStart.steps[0].id);
   log("info", "Conversation scenario started", { scenario: newStart.key });
   return { handled: true, requiresHuman: false };
+};
+
+// Respuesta a un paso "send_options" activo. Se evalúa antes que las reglas
+// generales (p. ej. cotizaciones con cantidad de pares) para que tocar
+// «Caricatura 500 pares» continúe el escenario en vez de escalar.
+exports.processOptionReply = async (organizationId, conversationId, incoming, optionId) => {
+  const [states, conversation] = await Promise.all([
+    db.query("SELECT scenario_key,step FROM conversation_scenario_states WHERE organization_id=$1 AND conversation_id=$2 AND completed_at IS NULL", [organizationId, conversationId]),
+    db.query("SELECT scenario_enabled FROM conversations WHERE id=$1 AND organization_id=$2", [conversationId, organizationId]),
+  ]);
+  const state = states.rows[0];
+  if (!state || conversation.rows[0]?.scenario_enabled === false) return { handled: false };
+  const scenario = (await exports.list(organizationId)).find((item) => item.isActive && item.key === state.scenario_key);
+  const step = scenario && byId(scenario, state.step);
+  if (!step || step.type !== "send_options") return { handled: false };
+  const option = optionForReply(step, incoming, optionId);
+  if (!option) return { handled: false };
+  await advance(organizationId, conversationId, scenario, option.nextStepId);
+  log("info", "Conversation scenario option selected", { scenario: scenario.key, step: step.id, option: option.id, source: optionId ? "interactive" : "text" });
+  return { handled: true };
 };

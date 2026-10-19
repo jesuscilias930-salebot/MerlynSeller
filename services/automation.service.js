@@ -167,10 +167,27 @@ const aiDetect = async (text, intents) => {
 };
 
 exports.processIncoming = async (organizationId, conversationId, message) => {
-  if (message.type !== 'text' || !message.id) return;
+  const optionReply = message.type === 'interactive'
+    ? message.interactive?.button_reply || message.interactive?.list_reply
+    : null;
+  if ((message.type !== 'text' && !optionReply) || !message.id) return;
   const [conversation, intents] = await Promise.all([db.query('SELECT auto_reply_enabled FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]), exports.list(organizationId)]);
   if (!conversation.rows[0]?.auto_reply_enabled) return;
-  const text = normalize(message.text?.body); if (!text) return;
+  const text = normalize(optionReply ? optionReply.title : message.text?.body); if (!text) return;
+  // Respuesta a un mensaje con opciones de un escenario activo: tiene prioridad
+  // sobre las reglas generales para no escalar opciones como «500 pares».
+  const optionResult = await scenarios.processOptionReply(organizationId, conversationId, text, optionReply?.id);
+  if (optionResult.handled) return;
+  if (optionReply) {
+    // Opción tocada fuera de un paso que la espere: puede iniciar un escenario
+    // por sus frases; si no, la atiende una persona.
+    const started = await scenarios.processIncoming(organizationId, conversationId, text);
+    if (!started.handled) {
+      const moved = await leads.moveToAttention(organizationId, conversationId);
+      log('info', 'Interactive option reply escalated to human attention', { conversationId, movedToAttention: moved });
+    }
+    return;
+  }
   // A configured scenario always has the first chance to route the message.
   // This permits a scenario such as "Envíos nacionales" to use "hace envíos"
   // as its start trigger, including when it replaces another active scenario.

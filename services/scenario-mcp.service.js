@@ -52,7 +52,7 @@ exports.validate = async (organizationId, input, client = db) => {
   while (pending.length) {
     const id = pending.pop(); if (reachable.has(id)) continue; reachable.add(id);
     const step = ids.get(id);
-    for (const next of [step.nextStepId, step.fallbackStepId, ...(step.branches || []).map(branch => branch.nextStepId)].filter(Boolean)) pending.push(next);
+    for (const next of [step.nextStepId, step.fallbackStepId, ...(step.branches || []).map(branch => branch.nextStepId), ...(step.options || []).map(option => option.nextStepId)].filter(Boolean)) pending.push(next);
   }
   for (const step of definition.steps) {
     if (!reachable.has(step.id)) fail(400, `El paso ${step.label} no está conectado al inicio`);
@@ -63,12 +63,12 @@ exports.validate = async (organizationId, input, client = db) => {
       if (!media.has(item.mediaId)) fail(400, 'El archivo no pertenece a los recursos disponibles de tu negocio');
     for (const option of step.budgetOptions || [])
       for (const id of option.packageIds || []) if (!packages.has(id)) fail(400, 'El paquete recomendado no pertenece a tu negocio');
-    if (step.type !== 'end' && step.type !== 'wait_reply' && !step.nextStepId) fail(400, `Conecta el siguiente paso de ${step.label}`);
+    if (!['end', 'wait_reply', 'send_options'].includes(step.type) && !step.nextStepId) fail(400, `Conecta el siguiente paso de ${step.label}`);
   }
   // Automatic-only cycles would send repeated messages. Loops that wait for a reply are allowed.
   const visiting = new Set(), done = new Set();
   const walk = id => {
-    const step = ids.get(id); if (step.type === 'wait_reply' || step.type === 'budget_recommendation' || done.has(id)) return;
+    const step = ids.get(id); if (['wait_reply', 'budget_recommendation', 'send_options'].includes(step.type) || done.has(id)) return;
     if (visiting.has(id)) fail(400, 'Hay un ciclo de pasos automáticos sin esperar una respuesta');
     visiting.add(id); if (step.nextStepId) walk(step.nextStepId); visiting.delete(id); done.add(id);
   };

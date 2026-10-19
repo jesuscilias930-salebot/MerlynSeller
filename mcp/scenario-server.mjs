@@ -11,10 +11,14 @@ export const definitionSchema = z.object({
   aiDescription: z.string().trim().min(10).max(700).nullable().optional(), priority: z.number().int().min(0).max(1000).default(0),
   canInterrupt: z.boolean().default(true), isActive: z.boolean().default(false).describe('Crear apagado por defecto. true solo si el usuario autoriza activar respuestas a clientes.'),
   steps: z.array(z.object({
-    id: reference, label: z.string().min(1).max(100), type: z.enum(['send_text','send_catalog','send_media','wait_reply','budget_recommendation','move_column','end']),
+    id: reference, label: z.string().min(1).max(100), type: z.enum(['send_text','send_catalog','send_media','wait_reply','send_options','budget_recommendation','move_column','end']),
     body: z.string().max(4096).optional(), caption: z.string().max(1024).optional(), fallbackBody: z.string().max(4096).optional(),
     resendCatalog: z.boolean().optional(), nextStepId: reference.optional(), fallbackStepId: reference.optional(), columnId: z.uuid().optional(),
     items: z.array(media).max(20).optional(),
+    header: z.string().max(60).optional(), footer: z.string().max(60).optional(), format: z.enum(['auto','buttons','list']).optional(),
+    buttonText: z.string().max(20).optional(), sectionTitle: z.string().max(24).optional(),
+    options: z.array(z.object({ id: z.string().max(200).optional(), title: z.string().min(1).max(24), description: z.string().max(72).optional(), nextStepId: reference.optional() })).max(10).optional()
+      .describe('send_options: mensaje con botones (≤3 opciones cortas) o lista (≤10). body es el texto; cada opción continúa en nextStepId o termina el escenario.'),
     branches: z.array(z.object({ id: reference, name: z.string().min(1).max(100), aiDescription: z.string().max(700).optional(), examples: z.array(z.string().min(1).max(240)).min(1).max(30), nextStepId: reference })).max(20).optional(),
     budgetOptions: z.array(z.object({ id: reference, label: z.string().min(1).max(120), min: z.number().min(0).optional(), max: z.number().min(0).optional(),
       examples: z.array(z.string().min(1).max(240)).max(20).optional(), packageIds: z.array(z.uuid()).max(20).optional(),

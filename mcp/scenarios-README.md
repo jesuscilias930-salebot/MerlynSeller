@@ -16,7 +16,7 @@ El acceso vence en 7 días y se puede revocar en el CRM. Regenerar invalida el c
 
 Ejemplo: «Crea un escenario apagado para quienes piden catálogo. Envía el catálogo que ya está cargado, pregunta si compra para revender, espera su respuesta y mueve el lead a la columna existente que te indique».
 
-Codex consulta escenarios/recursos, presenta el flujo, valida y guarda. Los nuevos quedan apagados por defecto. Para activar respuestas futuras se requiere autorización explícita. Recargar Escenarios para ver el resultado. Admitidos: texto, catálogo, fotos/documentos existentes, esperar respuesta con ramas, recomendaciones por presupuesto, mover columna y finalizar. Consultar datos faltantes en lugar de inventarlos.
+Codex consulta escenarios/recursos, presenta el flujo, valida y guarda. Los nuevos quedan apagados por defecto. Para activar respuestas futuras se requiere autorización explícita. Recargar Escenarios para ver el resultado. Admitidos: texto, catálogo, fotos/documentos existentes, esperar respuesta con ramas, mensajes con opciones (botones o lista, cada opción con su paso siguiente), recomendaciones por presupuesto, mover columna y finalizar. Consultar datos faltantes en lugar de inventarlos.
 
 Las ediciones usan una revisión para no sobrescribir cambios recientes del editor. Si la red falla, consultar el escenario y reutilizar su UUID; no crear uno nuevo a ciegas. No se incluyen herramientas para eliminar escenarios ni mandar mensajes directamente.
 
