@@ -83,11 +83,11 @@ const budgetOptionSchema = z
   })
   .refine(
     (option) => option.min == null || option.max == null || option.min <= option.max,
-    "The minimum budget cannot exceed the maximum budget",
+    "El presupuesto mínimo no puede ser mayor que el máximo",
   )
   .refine(
     (option) => Boolean(option.packageIds?.length || option.items?.length),
-    "Select at least one package or photo for the budget recommendation",
+    "Selecciona al menos un paquete o fotografía para la recomendación",
   );
 const stepSchema = z.object({
   id: z
@@ -161,33 +161,33 @@ const scenarioSchema = z
       if (ids.has(step.id))
         ctx.addIssue({
           code: "custom",
-          message: `Duplicate step id: ${step.id}`,
+          message: `El identificador de paso ${step.id} está repetido`,
         });
       ids.add(step.id);
       if (step.type === "send_text" && !step.body?.trim())
         ctx.addIssue({
           code: "custom",
-          message: `Step ${index + 1} needs text`,
+          message: `Paso ${index + 1} (${step.label}): escribe el mensaje`,
         });
       if (step.type === "wait_reply" && !step.branches?.length)
         ctx.addIssue({
           code: "custom",
-          message: `Step ${index + 1} needs at least one answer branch`,
+          message: `Paso ${index + 1} (${step.label}): agrega al menos una respuesta posible`,
         });
       if (step.type === "send_options" && !step.options?.length)
         ctx.addIssue({
           code: "custom",
-          message: `Step ${index + 1} needs at least one option`,
+          message: `Paso ${index + 1} (${step.label}): agrega al menos una opción`,
         });
       if (step.type === "budget_recommendation" && !step.budgetOptions?.length)
         ctx.addIssue({
           code: "custom",
-          message: `Step ${index + 1} needs at least one budget option`,
+          message: `Paso ${index + 1} (${step.label}): agrega al menos un rango de presupuesto`,
         });
       if (step.type === "budget_recommendation" && !step.nextStepId)
         ctx.addIssue({
           code: "custom",
-          message: `Step ${index + 1} needs a next step after the recommendation`,
+          message: `Paso ${index + 1} (${step.label}): elige el paso que continúa después de recomendar`,
         });
     }
     const references = value.steps
@@ -202,7 +202,7 @@ const scenarioSchema = z
       if (!ids.has(id))
         ctx.addIssue({
           code: "custom",
-          message: `Step reference not found: ${id}`,
+          message: `Una conexión apunta a un paso que ya no existe (${id})`,
         });
   });
 const optionMessage = (step) => ({
@@ -241,6 +241,35 @@ const normalizeOptionsStep = (step, index) => {
   }
   return normalized;
 };
+// Traduce el primer problema de validación a un mensaje claro en español,
+// indicando el paso y el campo para que se pueda corregir sin perder el trabajo.
+const fieldNames = {
+  name: "Nombre", triggerExamples: "Frases que lo inician", aiDescription: "Descripción para la IA", steps: "Pasos",
+  label: "Nombre del paso", body: "Mensaje", caption: "Texto que acompaña", fallbackBody: "Respuesta si no coincide",
+  branches: "Respuestas posibles", examples: "Ejemplos", nextStepId: "Siguiente paso", columnId: "Columna",
+  budgetOptions: "Rangos de presupuesto", recommendationBody: "Texto de recomendación", items: "Archivos",
+  options: "Opciones", title: "Texto de la opción", description: "Descripción", header: "Encabezado", footer: "Pie",
+  buttonText: "Texto del botón", sectionTitle: "Título de la sección", id: "Identificador",
+};
+const describeIssue = (issue, input) => {
+  const path = issue.path || [];
+  const parts = [];
+  if (path[0] === "steps" && Number.isInteger(path[1])) {
+    const label = input?.steps?.[path[1]]?.label;
+    parts.push(`Paso ${path[1] + 1}${label ? ` (${label})` : ""}`);
+  }
+  const field = [...path].reverse().find((key) => typeof key === "string" && key !== "steps");
+  if (field && fieldNames[field]) parts.push(fieldNames[field]);
+  const origin = issue.origin === "array" ? "array" : "string";
+  let message = issue.message;
+  if (issue.code === "too_small") message = origin === "array" ? (issue.minimum <= 1 ? "agrega al menos uno" : `agrega al menos ${issue.minimum}`) : issue.minimum <= 1 ? "no puede quedar vacío" : `necesita al menos ${issue.minimum} caracteres`;
+  else if (issue.code === "too_big") message = origin === "array" ? `admite máximo ${issue.maximum}` : `admite máximo ${issue.maximum} caracteres`;
+  else if (issue.code === "invalid_type") message = "falta o tiene un formato inválido";
+  else if (issue.code === "invalid_value") message = "tiene un valor no permitido";
+  else if (issue.code === "invalid_format") message = "tiene un formato inválido";
+  if (issue.code === "custom") return message;
+  return parts.length ? `${parts.join(" · ")}: ${message}` : message;
+};
 const parse = (input) => {
   const result = scenarioSchema.safeParse(input);
   if (result.success)
@@ -250,7 +279,7 @@ const parse = (input) => {
         step.type === "send_options" ? normalizeOptionsStep(step, index) : step,
       ),
     };
-  const error = new Error(result.error.issues[0].message);
+  const error = new Error(describeIssue(result.error.issues[0], input));
   error.status = 400;
   throw error;
 };

@@ -32,9 +32,9 @@ test('el paso de opciones se valida con límites de WhatsApp y conserva destinos
   assert.deepEqual(step.options[0], { id: 'caricatura_50_pares', title: 'Caricatura 50 pares', description: '$446.50', nextStepId: 'gracias' });
   assert.deepEqual(step.options[5], { id: 'ayudame_a_elegir', title: 'Ayúdame a elegir', nextStepId: 'asesor' });
   assert.deepEqual(scenarios.parseDefinition(parsed), parsed, 'volver a validar no cambia ids');
-  assert.throws(() => scenarios.parseDefinition({ ...definition, steps: [{ ...optionsStep, options: [] }, ...definition.steps.slice(1)] }), /at least one option/);
+  assert.throws(() => scenarios.parseDefinition({ ...definition, steps: [{ ...optionsStep, options: [] }, ...definition.steps.slice(1)] }), /agrega al menos una opción/);
   assert.throws(() => scenarios.parseDefinition({ ...definition, steps: [{ ...optionsStep, format: 'buttons' }, ...definition.steps.slice(1)] }), /Paso 1 \(Elegir paquete\): Los botones permiten máximo 3/);
-  assert.throws(() => scenarios.parseDefinition({ ...definition, steps: [{ ...optionsStep, options: [{ title: 'Uno', nextStepId: 'no_existe' }] }, ...definition.steps.slice(1)] }), /Step reference not found: no_existe/);
+  assert.throws(() => scenarios.parseDefinition({ ...definition, steps: [{ ...optionsStep, options: [{ title: 'Uno', nextStepId: 'no_existe' }] }, ...definition.steps.slice(1)] }), /ya no existe \(no_existe\)/);
 });
 
 test('reconoce la opción por id, por texto exacto o por parecido sin empates', () => {
@@ -111,4 +111,12 @@ test('una opción con cantidad de pares no se escala como cotización', async ()
     assert.equal(calls[0][3], undefined);
     assert.equal(escalated, false);
   } finally { db.query = original.query; scenarios.processOptionReply = original.option; leads.moveToAttention = original.attention; }
+});
+
+test('los errores de validación indican paso y campo en español', () => {
+  assert.throws(() => scenarios.parseDefinition({ ...definition, name: 'x' }), { status: 400, message: 'Nombre: necesita al menos 2 caracteres' });
+  assert.throws(() => scenarios.parseDefinition({ ...definition, triggerExamples: [] }), { message: 'Frases que lo inician: agrega al menos uno' });
+  const steps = [{ id: 'hola', type: 'send_text', label: 'Saludo', body: ' ', nextStepId: 'fin' }, { id: 'fin', type: 'end', label: 'Fin' }];
+  assert.throws(() => scenarios.parseDefinition({ ...definition, steps }), { message: 'Paso 1 (Saludo): escribe el mensaje' });
+  assert.throws(() => scenarios.parseDefinition({ ...definition, steps: [{ ...steps[1], label: '' }] }), { message: 'Paso 1 · Nombre del paso: no puede quedar vacío' });
 });
