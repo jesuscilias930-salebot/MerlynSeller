@@ -29,4 +29,7 @@ router.get('/option-templates', requireUser, controller.listOptionTemplates);
 router.post('/option-templates', requireUser, requireRole('owner', 'admin'), controller.createOptionTemplate);
 router.patch('/option-templates/:id', requireUser, requireRole('owner', 'admin'), controller.updateOptionTemplate);
 router.delete('/option-templates/:id', requireUser, requireRole('owner', 'admin'), controller.deleteOptionTemplate);
+router.get('/business-hours', requireUser, controller.getBusinessHours);
+router.put('/business-hours', requireUser, requireRole('owner', 'admin'), controller.saveBusinessHours);
+router.post('/business-hours/preview', requireUser, controller.previewBusinessHours);
 module.exports = router;

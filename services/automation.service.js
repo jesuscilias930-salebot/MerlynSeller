@@ -2,6 +2,7 @@ const { z } = require('zod');
 const db = require('../lib/db');
 const conversations = require('./conversation.service');
 const scenarios = require('./scenario.service');
+const businessHours = require('./business-hours.service');
 const leads = require('./lead.service');
 
 const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
@@ -167,10 +168,15 @@ const aiDetect = async (text, intents) => {
 };
 
 exports.processIncoming = async (organizationId, conversationId, message) => {
+  if (!message?.id) return;
+  // Fuera de horario se responde primero con el aviso configurado (cualquier
+  // tipo de mensaje del cliente). Si así se configuró, nada más contesta.
+  const afterHours = await businessHours.handleIncoming(organizationId, conversationId, message);
+  if (afterHours.handled) return;
   const optionReply = message.type === 'interactive'
     ? message.interactive?.button_reply || message.interactive?.list_reply
     : null;
-  if ((message.type !== 'text' && !optionReply) || !message.id) return;
+  if (message.type !== 'text' && !optionReply) return;
   const [conversation, intents] = await Promise.all([db.query('SELECT auto_reply_enabled FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]), exports.list(organizationId)]);
   if (!conversation.rows[0]?.auto_reply_enabled) return;
   const text = normalize(optionReply ? optionReply.title : message.text?.body); if (!text) return;

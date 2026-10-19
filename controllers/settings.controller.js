@@ -332,3 +332,24 @@ exports.deleteOptionTemplate = async (req, res, next) => {
   try { await optionTemplates.remove(req.auth.organizationId, req.params.id); return res.status(204).end(); }
   catch (error) { return optionTemplateError(error, res, next); }
 };
+
+const businessHours = require('../services/business-hours.service');
+const hoursError = (error, res, next) => (error.status ? res.status(error.status).json({ error: error.message }) : next(error));
+exports.getBusinessHours = async (req, res, next) => {
+  try { const config = await businessHours.get(req.auth.organizationId); return res.json({ config, status: businessHours.status(config) }); }
+  catch (error) { return hoursError(error, res, next); }
+};
+exports.saveBusinessHours = async (req, res, next) => {
+  try { const config = await businessHours.save(req.auth.organizationId, req.body); return res.json({ config, status: businessHours.status(config) }); }
+  catch (error) { return hoursError(error, res, next); }
+};
+// Prueba sin guardar ni enviar: qué recibiría un cliente con el borrador actual.
+exports.previewBusinessHours = async (req, res, next) => {
+  try {
+    const config = businessHours.parse(req.body?.config);
+    const text = typeof req.body?.text === 'string' ? req.body.text.slice(0, 1000) : '';
+    const at = req.body?.at ? new Date(req.body.at) : new Date();
+    if (Number.isNaN(at.getTime())) return res.status(400).json({ error: 'Fecha de prueba inválida' });
+    return res.json(businessHours.evaluate(config, text, at));
+  } catch (error) { return hoursError(error, res, next); }
+};
