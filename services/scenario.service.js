@@ -608,10 +608,25 @@ const sendBudgetRecommendation = async (
 };
 
 // Una opción sin destino termina el escenario (el equipo continúa la conversación).
-const advance = (organizationId, conversationId, scenario, nextStepId) =>
-  nextStepId
-    ? run(organizationId, conversationId, scenario, nextStepId)
-    : complete(organizationId, conversationId);
+// Una opción sin destino termina el escenario (el equipo continúa la conversación).
+// Si la opción lleva a «Esperar respuesta», la misma elección se evalúa con sus
+// respuestas para no obligar al cliente a escribir otra vez.
+const advance = async (organizationId, conversationId, scenario, nextStepId, reply) => {
+  if (!nextStepId) return complete(organizationId, conversationId);
+  const target = byId(scenario, nextStepId);
+  if (target?.type === "wait_reply" && reply) {
+    const text = normalize(reply);
+    const ranked = (target.branches || [])
+      .filter((branch) => branch.nextStepId)
+      .map((branch) => ({ branch, value: score(text, [branch.name, ...(branch.examples || [])]) }))
+      .sort((left, right) => right.value - left.value);
+    if (ranked[0]?.value >= 0.6) {
+      log("info", "Scenario option forwarded to waiting step", { scenario: scenario.key, step: target.id, branch: ranked[0].branch.id });
+      return run(organizationId, conversationId, scenario, ranked[0].branch.nextStepId);
+    }
+  }
+  return run(organizationId, conversationId, scenario, nextStepId);
+};
 const optionBranches = (step) =>
   (step.options || []).map((option) => ({
     id: option.id,
@@ -745,7 +760,7 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
     if (step.type === "send_options") {
       const option = optionForReply(step, incoming);
       if (option) {
-        await advance(organizationId, conversationId, scenario, option.nextStepId);
+        await advance(organizationId, conversationId, scenario, option.nextStepId, option.title);
         log("info", "Conversation scenario option selected", { scenario: scenario.key, step: step.id, option: option.id, source: "text" });
         return { handled: true, requiresHuman: false };
       }
@@ -830,7 +845,7 @@ exports.processOptionReply = async (organizationId, conversationId, incoming, op
   if (!step || step.type !== "send_options") return { handled: false };
   const option = optionForReply(step, incoming, optionId);
   if (!option) return { handled: false };
-  await advance(organizationId, conversationId, scenario, option.nextStepId);
+  await advance(organizationId, conversationId, scenario, option.nextStepId, option.title);
   log("info", "Conversation scenario option selected", { scenario: scenario.key, step: step.id, option: option.id, source: optionId ? "interactive" : "text" });
   return { handled: true };
 };

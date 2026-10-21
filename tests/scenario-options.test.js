@@ -120,3 +120,33 @@ test('los errores de validación indican paso y campo en español', () => {
   assert.throws(() => scenarios.parseDefinition({ ...definition, steps }), { message: 'Paso 1 (Saludo): escribe el mensaje' });
   assert.throws(() => scenarios.parseDefinition({ ...definition, steps: [{ ...steps[1], label: '' }] }), { message: 'Paso 1 · Nombre del paso: no puede quedar vacío' });
 });
+
+test('una opción que lleva a «Esperar respuesta» se evalúa con sus respuestas', async () => {
+  const flow = scenarios.parseDefinition({
+    name: 'Paquetes', triggerExamples: ['quiero paquetes'], steps: [
+      { id: 'menu', type: 'send_options', label: 'Menú', body: '¿Qué buscas?', options: [{ title: 'Precios', nextStepId: 'espera' }, { title: 'Hablar con asesor', nextStepId: 'espera' }] },
+      { id: 'espera', type: 'wait_reply', label: 'Esperar', branches: [
+        { id: 'precios', name: 'Precios', examples: ['precios', 'cuanto cuesta'], nextStepId: 'lista' },
+        { id: 'asesor', name: 'Asesor', examples: ['hablar con asesor', 'asesor'], nextStepId: 'humano' },
+      ] },
+      { id: 'lista', type: 'send_text', label: 'Lista', body: 'Te paso la lista', nextStepId: 'fin' },
+      { id: 'humano', type: 'send_text', label: 'Humano', body: 'Te atiende un asesor', nextStepId: 'fin' },
+      { id: 'fin', type: 'end', label: 'Fin' },
+    ],
+  });
+  const original = { query: db.query, queueText: conversations.queueText };
+  const texts = []; let waitingAt = null;
+  db.query = async (sql, args) => {
+    if (sql.includes('FROM conversation_scenario_states')) return { rows: [{ scenario_key: 'paquetes', step: 'menu' }] };
+    if (sql.includes('scenario_enabled FROM conversations')) return { rows: [{ scenario_enabled: true }] };
+    if (sql.includes('FROM automation_scenarios')) return { rows: [{ id: 's1', key: 'paquetes', isActive: true, ...flow, position: 0 }] };
+    if (sql.includes('INSERT INTO conversation_scenario_states')) waitingAt = args[3];
+    return { rows: [] };
+  };
+  conversations.queueText = async (_o, _c, input) => { texts.push(input.body); return { id: 'm' }; };
+  try {
+    assert.deepEqual(await scenarios.processOptionReply('org', 'conv', 'hablar con asesor', 'hablar_con_asesor'), { handled: true });
+    assert.deepEqual(texts, ['Te atiende un asesor'], 'no espera otro mensaje');
+    assert.equal(waitingAt, null);
+  } finally { db.query = original.query; conversations.queueText = original.queueText; }
+});
