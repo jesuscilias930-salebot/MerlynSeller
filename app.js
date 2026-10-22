@@ -112,6 +112,7 @@ app.use('/shipping', shippingRoutes);
 app.use('/content-videos', require('./routes/content-video.routes'));
 app.use('/finances', require('./routes/finance.routes'));
 app.use('/deliveries', require('./routes/delivery.routes'));
+app.use('/inventory-locations', require('./routes/product-location.routes'));
 app.use('/conversation-analysis', require('./routes/conversation-analysis.routes'));
 app.use('/internal/store-shipping', require('./routes/store-shipping.routes'));
 app.use('/store-orders', require('./routes/store-orders.routes'));
