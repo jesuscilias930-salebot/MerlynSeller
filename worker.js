@@ -134,3 +134,23 @@ const inbound = new Worker('inbound-webhooks', async (job) => {
 
 inbound.on('failed', (job, error) => console.error(JSON.stringify({ level: 'error', queue: 'inbound-webhooks', jobId: job?.id, errorType: error.name })));
 console.log(JSON.stringify({ level: 'info', message: 'Worker listening for outbound messages' }));
+
+// Recordatorios: cada 30 s publica en el chat interno los que ya llegaron a su hora.
+const reminderService = require('./services/reminder.service');
+const REMINDER_INTERVAL_MS = 30_000;
+let checkingReminders = false;
+const checkReminders = async () => {
+  if (checkingReminders) return;
+  checkingReminders = true;
+  try {
+    const organizations = await reminderService.deliverDue();
+    for (const organizationId of organizations) await realtime.publish(organizationId, 'internal.updated', null);
+    if (organizations.length) console.log(JSON.stringify({ level: 'info', message: 'Reminders delivered to internal chat', organizations: organizations.length }));
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'error', message: 'Reminder check failed', errorType: error.name, errorMessage: error.message }));
+  } finally {
+    checkingReminders = false;
+  }
+};
+setInterval(() => { void checkReminders(); }, REMINDER_INTERVAL_MS);
+void checkReminders();
