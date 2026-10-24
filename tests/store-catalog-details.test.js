@@ -5,7 +5,7 @@ const db = require('../lib/db');
 
 const secret = 's'.repeat(40);
 const start = async () => {
-  process.env.STORE_WEBHOOK_SECRET = secret;
+  process.env.STORE_CATALOG_SECRET = secret;
   process.env.STORE_ORGANIZATION_ID = 'org-store';
   const app = express();
   app.use('/store-orders', require('../routes/store-orders.routes'));

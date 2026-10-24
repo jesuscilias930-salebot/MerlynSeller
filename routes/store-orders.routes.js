@@ -23,9 +23,9 @@ router.post('/events',async(req,res,next)=>{
  }catch(e){return next(e);}
 });
 // Color y modelo de los productos (viven en MerlynSeller) para agrupar variantes en la tienda.
-// Solo datos de catálogo; mismo secreto compartido que los eventos de pedidos.
+// Solo datos de catálogo, con su propio secreto compartido con la tienda (STORE_CATALOG_SECRET).
 router.get('/catalog-details',async(req,res,next)=>{
- const expected=process.env.STORE_WEBHOOK_SECRET||'',provided=req.get('X-Store-Secret')||'';
+ const expected=process.env.STORE_CATALOG_SECRET||'',provided=req.get('X-Store-Secret')||'';
  if(expected.length<32||Buffer.byteLength(expected)!==Buffer.byteLength(provided)||!crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(provided)))return res.sendStatus(401);
  const org=process.env.STORE_ORGANIZATION_ID;
  if(!org)return res.sendStatus(503);
