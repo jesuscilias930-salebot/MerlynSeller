@@ -38,7 +38,7 @@ app.use(cookieParser());
 // different domains. Reject browser requests from an unexpected Origin before
 // they can perform a session-based state change. Requests without an Origin
 // remain available for server-to-server integrations and Postman testing.
-const browserSessionPaths = ['/auth', '/conversations', '/settings', '/leads', '/remarketing', '/automations', '/scenarios', '/quick-replies', '/whatsapp-templates', '/shipping', '/features', '/content-videos', '/conversation-analysis', '/finances', '/deliveries', '/inventory-locations', '/product-details', '/reminders', '/internal-chat', '/pending-sales'];
+const browserSessionPaths = ['/auth', '/conversations', '/settings', '/leads', '/remarketing', '/automations', '/scenarios', '/quick-replies', '/whatsapp-templates', '/shipping', '/features', '/content-videos', '/conversation-analysis', '/finances', '/deliveries', '/inventory-locations', '/product-details', '/reminders', '/internal-chat', '/pending-sales', '/inventory-loans'];
 const unsafeMethods = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 app.use((req, res, next) => {
   const isBrowserSessionRequest = browserSessionPaths.some((path) => req.path === path || req.path.startsWith(`${path}/`));
@@ -113,6 +113,7 @@ app.use('/content-videos', require('./routes/content-video.routes'));
 app.use('/finances', require('./routes/finance.routes'));
 app.use('/deliveries', require('./routes/delivery.routes'));
 app.use('/inventory-locations', require('./routes/product-location.routes'));
+app.use('/inventory-loans', require('./routes/inventory-loan.routes'));
 app.use('/product-details', require('./routes/product-detail.routes'));
 app.use('/reminders', require('./routes/reminder.routes'));
 app.use('/internal-chat', require('./routes/internal-chat.routes'));
