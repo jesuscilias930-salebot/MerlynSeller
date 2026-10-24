@@ -28,3 +28,17 @@ test('la tienda lee color y modelo solo con el secreto compartido', async () => 
     assert.deepEqual(args, ['org-store']);
   } finally { db.query = original; server.close(); }
 });
+
+test('sin STORE_ORGANIZATION_ID usa la única organización; con varias no responde', async () => {
+  const { server, url } = await start();
+  delete process.env.STORE_ORGANIZATION_ID;
+  const original = db.query;
+  let orgs = [{ id: 'org-unica' }]; let used;
+  db.query = async (sql, values) => sql.startsWith('SELECT id FROM organizations') ? { rows: orgs } : (used = values, { rows: [] });
+  try {
+    assert.equal((await fetch(url, { headers: { 'X-Store-Secret': secret } })).status, 200);
+    assert.deepEqual(used, ['org-unica']);
+    orgs = [{ id: 'a' }, { id: 'b' }];
+    assert.equal((await fetch(url, { headers: { 'X-Store-Secret': secret } })).status, 503);
+  } finally { db.query = original; server.close(); }
+});

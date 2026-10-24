@@ -27,9 +27,10 @@ router.post('/events',async(req,res,next)=>{
 router.get('/catalog-details',async(req,res,next)=>{
  const expected=process.env.STORE_CATALOG_SECRET||'',provided=req.get('X-Store-Secret')||'';
  if(expected.length<32||Buffer.byteLength(expected)!==Buffer.byteLength(provided)||!crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(provided)))return res.sendStatus(401);
- const org=process.env.STORE_ORGANIZATION_ID;
- if(!org)return res.sendStatus(503);
  try{
+  // Sin STORE_ORGANIZATION_ID (p. ej. en local) solo se acepta si hay una única organización.
+  let org=process.env.STORE_ORGANIZATION_ID;
+  if(!org){const only=await db.query('SELECT id FROM organizations ORDER BY created_at LIMIT 2');if(only.rows.length!==1)return res.sendStatus(503);org=only.rows[0].id;}
   const result=await db.query('SELECT product_id AS "productId", color, model FROM product_details WHERE organization_id=$1 AND (color IS NOT NULL OR model IS NOT NULL) ORDER BY product_id',[org]);
   res.set('Cache-Control','no-store');return res.json(result.rows);
  }catch(e){return next(e);}
