@@ -138,6 +138,25 @@ exports.update = async (organizationId, id, input) => {
   });
 };
 
+/** Solo actualiza los productos (p. ej. para agregar color y talla) sin tocar hora ni estado. */
+exports.setProducts = async (organizationId, id, input) => {
+  if (!uuid(id)) notFound();
+  const parsed = z.array(line).max(30, 'Máximo 30 productos').safeParse(input?.products);
+  if (!parsed.success) fail(400, parsed.error.issues[0]?.message || 'Productos inválidos');
+  return db.transaction(async (client) => {
+    const updated = await client.query(
+      "UPDATE reminders SET products=$3::jsonb, updated_at=now() WHERE id=$1 AND organization_id=$2 AND status='scheduled' AND notified_at IS NULL RETURNING sale_id",
+      [id, organizationId, JSON.stringify(parsed.data)],
+    );
+    if (!updated.rows[0]) fail(409, 'Este recordatorio ya se avisó o se cerró.');
+    if (updated.rows[0].sale_id) await client.query(
+      "UPDATE pending_sales SET items=$3::jsonb, updated_at=now() WHERE id=$1 AND organization_id=$2 AND status='open'",
+      [updated.rows[0].sale_id, organizationId, JSON.stringify(parsed.data)],
+    );
+    return byId(organizationId, id, client);
+  });
+};
+
 exports.setStatus = async (organizationId, id, input) => {
   if (!uuid(id)) notFound();
   const status = input?.status;

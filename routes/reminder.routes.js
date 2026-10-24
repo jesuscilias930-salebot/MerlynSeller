@@ -21,6 +21,7 @@ const deliverNow = async (req, result) => {
 router.get('/', handle((req) => reminders.list(org(req), req.query)));
 router.post('/', handle(async (req) => deliverNow(req, await reminders.create(org(req), req.auth.user?.id, req.body)), 201));
 router.put('/:id', handle(async (req) => deliverNow(req, await reminders.update(org(req), req.params.id, req.body))));
+router.patch('/:id/products', handle((req) => reminders.setProducts(org(req), req.params.id, req.body)));
 router.patch('/:id/status', handle((req) => reminders.setStatus(org(req), req.params.id, req.body)));
 router.delete('/:id', handle((req) => reminders.remove(org(req), req.params.id)));
 module.exports = router;

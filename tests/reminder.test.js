@@ -112,3 +112,19 @@ test('notas del chat interno', async () => {
   const row = await withDb({ query: async (sql, args) => ({ rows: [{ id, body: args[1], kind: 'note' }] }) }, () => chat.addNote('org', 'user', { body: ' Llamar mañana ' }));
   assert.equal(row.body, 'Llamar mañana');
 });
+
+test('actualizar solo los productos también actualiza la venta abierta y respeta los ya avisados', async () => {
+  const calls = [];
+  const client = { query: async (sql, args) => {
+    calls.push({ sql, args });
+    if (sql.startsWith('UPDATE reminders')) return { rows: [{ sale_id: saleId }] };
+    return { rows: [{ id, products }] };
+  } };
+  await withDb({ transaction: (fn) => fn(client) }, () => reminders.setProducts('org', id, { products }));
+  assert.match(calls[0].sql, /notified_at IS NULL/);
+  assert.equal(calls[0].args[2], JSON.stringify(products));
+  assert.match(calls[1].sql, /UPDATE pending_sales SET items/);
+  const closed = { query: async () => ({ rows: [] }) };
+  await withDb({ transaction: (fn) => fn(closed) }, () => assert.rejects(reminders.setProducts('org', id, { products }), { status: 409 }));
+  await assert.rejects(reminders.setProducts('org', id, { products: [{ kind: 'product', name: '', quantity: 1 }] }), { status: 400 });
+});
