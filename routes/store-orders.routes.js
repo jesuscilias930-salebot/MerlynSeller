@@ -22,5 +22,17 @@ router.post('/events',async(req,res,next)=>{
  await realtime.publish(org,'store.order_updated');return res.sendStatus(204);
  }catch(e){return next(e);}
 });
+// Color y modelo de los productos (viven en MerlynSeller) para agrupar variantes en la tienda.
+// Solo datos de catálogo; mismo secreto compartido que los eventos de pedidos.
+router.get('/catalog-details',async(req,res,next)=>{
+ const expected=process.env.STORE_WEBHOOK_SECRET||'',provided=req.get('X-Store-Secret')||'';
+ if(expected.length<32||Buffer.byteLength(expected)!==Buffer.byteLength(provided)||!crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(provided)))return res.sendStatus(401);
+ const org=process.env.STORE_ORGANIZATION_ID;
+ if(!org)return res.sendStatus(503);
+ try{
+  const result=await db.query('SELECT product_id AS "productId", color, model FROM product_details WHERE organization_id=$1 AND (color IS NOT NULL OR model IS NOT NULL) ORDER BY product_id',[org]);
+  res.set('Cache-Control','no-store');return res.json(result.rows);
+ }catch(e){return next(e);}
+});
 router.get('/conversation/:id',requireUser,async(req,res,next)=>{try{if(!z.string().uuid().safeParse(req.params.id).success)return res.sendStatus(400);const result=await db.query('SELECT payload FROM store_orders WHERE organization_id=$1 AND conversation_id=$2 ORDER BY created_at DESC',[req.auth.organizationId,req.params.id]);return res.json(result.rows.map(r=>r.payload));}catch(e){return next(e);}});
 module.exports=router;
