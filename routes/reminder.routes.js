@@ -7,7 +7,7 @@ router.use(requireUser);
 router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 const handle = (fn, status = 200) => async (req, res, next) => {
   try { res.status(status).json(await fn(req)); }
-  catch (error) { if ([400, 404].includes(error.status)) return res.status(error.status).json({ error: error.message }); return next(error); }
+  catch (error) { if ([400, 404, 409].includes(error.status)) return res.status(error.status).json({ error: error.message }); return next(error); }
 };
 const org = (req) => req.auth.organizationId;
 // Un recordatorio con hora pasada se publica de inmediato en el chat interno.

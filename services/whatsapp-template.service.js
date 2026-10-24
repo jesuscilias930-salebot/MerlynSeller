@@ -101,3 +101,41 @@ exports.resolveForConversation = async (organizationId, conversationId, template
   const components = [...byComponent.entries()].map(([type, values]) => ({ type, parameters: values.sort((a, b) => a.position - b.position).map(item => ({ type: 'text', text: item.value })) }));
   return { template: response(template.rows[0]), phoneNumber: contact.rows[0].phone_number, components };
 };
+
+// Variables de plantilla que salen de un recordatorio (nombre, productos, fecha acordada).
+const REMINDER_SOURCES = ['reminder.name', 'reminder.products', 'reminder.agreed_date', 'fixed'];
+exports.REMINDER_SOURCES = REMINDER_SOURCES;
+exports.reminderMappingSchema = z.array(z.object({
+  component: z.enum(['body', 'header']),
+  position: z.coerce.number().int().positive(),
+  source: z.enum(REMINDER_SOURCES),
+  value: z.string().trim().max(1024).optional(),
+})).max(30);
+
+/** WhatsApp no admite saltos de línea ni más de 4 espacios seguidos en un parámetro. */
+const parameterText = (value) => String(value || '').replace(/[\r\n\t]+/g, ' ').replace(/ {4,}/g, '   ').trim().slice(0, 1024);
+
+/**
+ * Componentes para enviar una plantilla aprobada con los datos de un recordatorio.
+ * `values` trae { 'reminder.name', 'reminder.products', 'reminder.agreed_date' }.
+ */
+exports.resolveForReminder = async (organizationId, templateId, mappings, values) => {
+  const template = await db.query('SELECT * FROM whatsapp_templates WHERE id=$1 AND organization_id=$2', [templateId, organizationId]);
+  const row = template.rows[0];
+  if (!row) { const error = new Error('La plantilla del recordatorio ya no existe. Sincroniza tus plantillas y elige otra.'); error.status = 400; throw error; }
+  if (row.status !== 'APPROVED') { const error = new Error(`La plantilla «${row.name}» no está aprobada por WhatsApp (${row.status}).`); error.status = 400; throw error; }
+  const byKey = new Map((mappings || []).map(mapping => [`${mapping.component}:${mapping.position}`, mapping]));
+  const byComponent = new Map();
+  for (const variable of extractVariables(row.components || [])) {
+    const mapping = byKey.get(`${variable.component}:${variable.position}`);
+    if (!mapping) { const error = new Error(`Elige qué va en la variable {{${variable.position}}} de la plantilla «${row.name}».`); error.status = 400; throw error; }
+    const value = parameterText(mapping.source === 'fixed' ? mapping.value : values[mapping.source]);
+    if (!value) { const error = new Error(`Falta el valor de {{${variable.position}}} (${mapping.source === 'reminder.products' ? 'productos' : mapping.source === 'reminder.agreed_date' ? 'fecha acordada' : mapping.source === 'reminder.name' ? 'nombre' : 'texto fijo'}).`); error.status = 400; throw error; }
+    const current = byComponent.get(variable.component) || [];
+    current.push({ position: variable.position, value });
+    byComponent.set(variable.component, current);
+  }
+  const components = [...byComponent.entries()].map(([type, list]) => ({ type, parameters: list.sort((a, b) => a.position - b.position).map(item => ({ type: 'text', text: item.value })) }));
+  return { template: response(row), components };
+};
+exports.extractVariables = extractVariables;

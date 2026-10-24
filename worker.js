@@ -49,6 +49,16 @@ const send = (message) => message.type === 'document'
               ? messageService.sendTemplate({ to: message.phone_number, ...JSON.parse(message.body || '{}') })
             : messageService.sendText({ to: message.phone_number, body: message.body, replyToProviderMessageId: message.reply_to_provider_message_id || undefined });
 
+// Si la plantilla era de un recordatorio automático, avisa en el chat interno.
+const notifyReminder = async (messageId, status, failure) => {
+  try {
+    const organizationId = await require('./services/reminder.service').onTemplateResult(messageId, status, failure);
+    if (organizationId) await realtime.publish(organizationId, 'internal.updated', null);
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'error', message: 'Reminder notification failed', messageId, errorType: error.name }));
+  }
+};
+
 const releaseLock = (key, token) => outboundRedis.eval(
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0",
   1,
@@ -89,11 +99,13 @@ const drainConversation = async (conversationId, jobId) => {
         const sent = await send(message);
         await db.query("UPDATE messages SET status = 'sent', provider_message_id = $2, updated_at = now() WHERE id = $1", [message.id, sent.messages[0]?.id || null]);
         await realtime.publish(message.organization_id, 'message.sent', message.conversation_id);
+        if (message.type === 'template') await notifyReminder(message.id, 'sent');
         console.log(JSON.stringify({ level: 'info', message: 'Outbound message sent in FIFO order', conversationId, messageId: message.id, sequence: message.outbound_sequence }));
       } catch (error) {
         const failure = error.meta?.details || error.meta?.message || error.message;
         await db.query("UPDATE messages SET status = 'failed', error_code = $2, updated_at = now() WHERE id = $1", [message.id, failure]);
         await realtime.publish(message.organization_id, 'message.failed', message.conversation_id);
+        if (message.type === 'template') await notifyReminder(message.id, 'failed', failure);
         console.error(JSON.stringify({ level: 'error', message: 'Outbound message failed in FIFO drain', conversationId, messageId: message.id, sequence: message.outbound_sequence, errorType: error.name, status: error.status, errorMessage: failure, meta: error.meta }));
       }
       processed += 1;
