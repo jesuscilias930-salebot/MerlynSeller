@@ -14,7 +14,7 @@ router.get('/entrepreneur-packages', requireUser, controller.listEntrepreneurPac
 router.get('/entrepreneur-packages/images/:imageId/media', requireUser, controller.entrepreneurPackageImageMedia);
 router.get('/entrepreneur-packages/:id/media', requireUser, controller.entrepreneurPackageMedia);
 router.post('/entrepreneur-packages', requireUser, requireRole('owner', 'admin'), controller.createEntrepreneurPackage);
-router.post('/entrepreneur-packages/upload', requireUser, requireRole('owner', 'admin'), require('express').raw({ type: isImage, limit: '5mb' }), controller.uploadEntrepreneurPackage);
+router.post('/entrepreneur-packages/upload', requireUser, requireRole('owner', 'admin'), require('express').raw({ type: isImage, limit: '20mb' }), controller.uploadEntrepreneurPackage);
 router.patch('/entrepreneur-packages/:id', requireUser, requireRole('owner', 'admin'), controller.updateEntrepreneurPackage);
 router.delete('/entrepreneur-packages/:id', requireUser, requireRole('owner', 'admin'), controller.deleteEntrepreneurPackage);
 router.get('/stickers', requireUser, controller.listStickers);

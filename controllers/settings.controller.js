@@ -1,6 +1,7 @@
 const { z } = require('zod');
 const db = require('../lib/db');
 const messageService = require('../services/message.service');
+const { fitWhatsAppImage } = require('../services/image-compression');
 
 const catalogSchema = z.object({
   mediaId: z.string().trim().min(1).max(256),
@@ -164,7 +165,9 @@ exports.uploadEntrepreneurPackage = async (req, res, next) => {
     const requestedCategory = decodeURIComponent(req.get('x-image-category') || '').trim();
     const parsed = entrepreneurPackageSchema.pick({ name: true, imageCategory: true }).safeParse({ name: requestedName, imageCategory: requestedCategory || null });
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0].message });
-    const uploaded = await messageService.uploadMedia({ buffer: req.body, contentType, filename });
+    // Hasta 20 MB: si pasa de 5 MB se reduce para que WhatsApp la acepte.
+    const prepared = await fitWhatsAppImage({ buffer: req.body, contentType, filename });
+    const uploaded = await messageService.uploadMedia({ buffer: prepared.buffer, contentType: prepared.contentType, filename: prepared.filename });
     const result = await db.transaction(async (client) => {
       let groupId = packageId;
       if (groupId) {
@@ -178,7 +181,10 @@ exports.uploadEntrepreneurPackage = async (req, res, next) => {
       return { groupId, image: image.rows[0] };
     });
     return res.status(201).json(result);
-  } catch (error) { return next(error); }
+  } catch (error) {
+    if ([400, 404, 413, 415, 422].includes(error.status)) return res.status(error.status).json({ error: error.message });
+    return next(error);
+  }
 };
 
 exports.updateEntrepreneurPackage = async (req, res, next) => {

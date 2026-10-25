@@ -128,6 +128,9 @@ app.use((err, req, res, next) => {
   if (err instanceof SyntaxError && 'body' in err) {
     return res.status(400).json({ error: 'Invalid JSON body' });
   }
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'El archivo supera el tamaño permitido.' });
+  }
   console.error(JSON.stringify({
     level: 'error',
     message: 'Unhandled webhook request error',
