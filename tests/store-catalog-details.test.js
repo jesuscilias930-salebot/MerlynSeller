@@ -42,3 +42,15 @@ test('sin STORE_ORGANIZATION_ID usa la única organización; con varias no respo
     assert.equal((await fetch(url, { headers: { 'X-Store-Secret': secret } })).status, 503);
   } finally { db.query = original; server.close(); }
 });
+
+test('la tienda lee las secciones de categorías con el secreto', async () => {
+  const { server, url } = await start();
+  const sections = url.replace('catalog-details', 'catalog-sections');
+  const original = db.query;
+  db.query = async (sql, values) => ({ rows: sql.includes('store_category_sections') && values[0] === 'org-store' ? [{ categoryId: 5, section: 'Essentials', position: 1 }] : [] });
+  try {
+    assert.equal((await fetch(sections)).status, 401);
+    const response = await fetch(sections, { headers: { 'X-Store-Secret': secret } });
+    assert.deepEqual(await response.json(), [{ categoryId: 5, section: 'Essentials', position: 1 }]);
+  } finally { db.query = original; server.close(); }
+});
