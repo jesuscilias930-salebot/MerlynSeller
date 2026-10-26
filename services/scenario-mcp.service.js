@@ -58,7 +58,8 @@ exports.validate = async (organizationId, input, client = db) => {
     if (!reachable.has(step.id)) fail(400, `El paso ${step.label} no está conectado al inicio`);
     if (step.type === 'move_column' && !columns.has(step.columnId)) fail(400, 'Selecciona una columna existente de tu negocio');
     if (step.type === 'send_catalog' && !context.documents.some(row => row.isCatalog)) fail(400, 'Configura el catálogo del negocio antes de usar este paso');
-    if (step.type === 'send_media' && !step.items?.length) fail(400, 'El paso de fotografías/documentos necesita archivos');
+    if (step.type === 'send_media' && !step.items?.length && !step.packageIds?.length) fail(400, 'El paso de fotografías/documentos necesita archivos o un conjunto');
+    for (const id of step.packageIds || []) if (!packages.has(id)) fail(400, 'El conjunto de imágenes no pertenece a tu negocio');
     for (const item of [...(step.items || []), ...(step.budgetOptions || []).flatMap(option => option.items || [])])
       if (!media.has(item.mediaId)) fail(400, 'El archivo no pertenece a los recursos disponibles de tu negocio');
     for (const option of step.budgetOptions || [])

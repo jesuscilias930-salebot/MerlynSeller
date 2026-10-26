@@ -52,3 +52,12 @@ test('save detects concurrent edits, accepts identical retry and inserts scoped 
     await service.save('org-1', { id, expectedRevision: null, definition }); assert.equal(writes, 1);
   } finally { db.transaction = original; }
 });
+
+test('el paso de fotografías acepta conjuntos reutilizables del negocio', async () => {
+  const scenarios = require('../services/scenario.service');
+  const setId = '33333333-3333-4333-8333-333333333333';
+  const step = { id: 'photo', label: 'Fotos', type: 'send_media', packageIds: [setId], nextStepId: 'end' };
+  assert.deepEqual(scenarios.parseDefinition(draft([step, end])).steps[0].packageIds, [setId]);
+  assert.throws(() => scenarios.parseDefinition(draft([{ ...step, packageIds: [] }, end])), /archivo o conjunto/);
+  await assert.rejects(service.validate('org-1', draft([step, end]), { query: resources }), /conjunto de imágenes no pertenece/);
+});

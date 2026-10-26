@@ -72,6 +72,8 @@ const stepSchema = z.object({
     )
     .max(20)
     .optional(),
+  // send_media: conjuntos de Documentos → Conjuntos reutilizables; se envían sus fotos actuales.
+  packageIds: z.array(z.string().uuid()).max(10).optional(),
   branches: z.array(branchSchema).max(20).optional(),
   budgetOptions: z.array(budgetOptionSchema).min(1).max(50).optional(),
   fallbackStepId: z.string().trim().min(1).max(80).optional(),
@@ -128,6 +130,11 @@ const scenarioSchema = z
         ctx.addIssue({
           code: "custom",
           message: `Paso ${index + 1} (${step.label}): agrega al menos una opción`,
+        });
+      if (step.type === "send_media" && !step.items?.length && !step.packageIds?.length)
+        ctx.addIssue({
+          code: "custom",
+          message: `Paso ${index + 1} (${step.label}): agrega al menos un archivo o conjunto`,
         });
       if (step.type === "budget_recommendation" && !step.budgetOptions?.length)
         ctx.addIssue({
@@ -607,7 +614,24 @@ const sendBudgetRecommendation = async (
     );
 };
 
-// Una opción sin destino termina el escenario (el equipo continúa la conversación).
+// Envía las fotos actuales de los conjuntos del paso. Un conjunto borrado o vacío se omite
+// para que el resto del escenario continúe.
+const queueStepPackages = async (organizationId, conversationId, packageIds) => {
+  const rows = (
+    await db.query(
+      `SELECT package.id FROM entrepreneur_packages package
+       WHERE package.organization_id=$1 AND package.id = ANY($2::uuid[])
+         AND EXISTS (SELECT 1 FROM entrepreneur_package_images image WHERE image.package_id=package.id)`,
+      [organizationId, packageIds],
+    )
+  ).rows;
+  const available = new Set(rows.map((row) => row.id));
+  const ids = packageIds.filter((id) => available.has(id));
+  if (ids.length !== packageIds.length)
+    log("warn", "Scenario image set skipped", { missing: packageIds.length - ids.length });
+  if (ids.length) await conversations.queueEntrepreneurPackages(organizationId, conversationId, { packageIds: ids });
+};
+
 // Una opción sin destino termina el escenario (el equipo continúa la conversación).
 // Si la opción lleva a «Esperar respuesta», la misma elección se evalúa con sus
 // respuestas para no obligar al cliente a escribir otra vez.
@@ -705,6 +729,8 @@ const run = async (
         body: "El catálogo ya está en esta conversación. Si no puedes abrirlo, dime y con gusto te lo reenvío.",
       });
   }
+  if (step.type === "send_media" && step.packageIds?.length)
+    await queueStepPackages(organizationId, conversationId, step.packageIds);
   if (step.type === "send_media")
     for (const item of step.items || []) {
       if (item.type === "document")
