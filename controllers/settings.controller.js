@@ -211,6 +211,69 @@ exports.deleteEntrepreneurPackage = async (req, res, next) => {
   } catch (error) { return next(error); }
 };
 
+// La portada del conjunto es su primera imagen; se actualiza al borrar o reordenar.
+const syncPackageCover = (client, packageId) => client.query(
+  `UPDATE entrepreneur_packages p SET media_id=first.media_id, filename=first.filename, updated_at=now()
+   FROM (SELECT media_id, filename FROM entrepreneur_package_images WHERE package_id=$1 ORDER BY position, created_at LIMIT 1) first
+   WHERE p.id=$1`,
+  [packageId],
+);
+const imageOrderSchema = z.object({ imageIds: z.array(z.string().uuid()).min(1).max(200) });
+
+/** Quita una imagen del conjunto; las demás conservan su orden. */
+exports.deleteEntrepreneurPackageImage = async (req, res, next) => {
+  try {
+    if (!z.string().uuid().safeParse(req.params.imageId).success) return res.status(404).json({ error: 'Imagen no encontrada' });
+    const packageId = await db.transaction(async (client) => {
+      const deleted = await client.query(
+        `DELETE FROM entrepreneur_package_images image USING entrepreneur_packages p
+         WHERE image.id=$1 AND p.id=image.package_id AND p.organization_id=$2 RETURNING image.package_id`,
+        [req.params.imageId, req.auth.organizationId],
+      );
+      if (!deleted.rows[0]) return null;
+      const id = deleted.rows[0].package_id;
+      await client.query(
+        `UPDATE entrepreneur_package_images image SET position=ordered.rank
+         FROM (SELECT id, (row_number() OVER (ORDER BY position, created_at) - 1)::int AS rank FROM entrepreneur_package_images WHERE package_id=$1) ordered
+         WHERE image.id=ordered.id`,
+        [id],
+      );
+      const remaining = await client.query('SELECT 1 FROM entrepreneur_package_images WHERE package_id=$1 LIMIT 1', [id]);
+      if (remaining.rows[0]) await syncPackageCover(client, id);
+      else await client.query('UPDATE entrepreneur_packages SET media_id=NULL, filename=NULL, updated_at=now() WHERE id=$1', [id]);
+      return id;
+    });
+    if (!packageId) return res.status(404).json({ error: 'Imagen no encontrada' });
+    return res.status(204).end();
+  } catch (error) { return next(error); }
+};
+
+/** Guarda el orden en que se enviarán las imágenes del conjunto. */
+exports.reorderEntrepreneurPackageImages = async (req, res, next) => {
+  try {
+    const parsed = imageOrderSchema.safeParse(req.body);
+    if (!parsed.success || !z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ error: 'Orden de imágenes inválido' });
+    const ids = parsed.data.imageIds;
+    const result = await db.transaction(async (client) => {
+      const owned = await client.query('SELECT id FROM entrepreneur_packages WHERE id=$1 AND organization_id=$2', [req.params.id, req.auth.organizationId]);
+      if (!owned.rows[0]) return { status: 404, error: 'Conjunto no encontrado' };
+      const current = (await client.query('SELECT id FROM entrepreneur_package_images WHERE package_id=$1', [req.params.id])).rows.map((row) => row.id);
+      if (new Set(ids).size !== ids.length || current.length !== ids.length || !current.every((id) => ids.includes(id)))
+        return { status: 409, error: 'Las imágenes del conjunto cambiaron. Actualiza la página e intenta de nuevo.' };
+      await client.query(
+        `UPDATE entrepreneur_package_images image SET position=ordered.ord - 1
+         FROM unnest($2::uuid[]) WITH ORDINALITY AS ordered(id, ord)
+         WHERE image.id=ordered.id AND image.package_id=$1`,
+        [req.params.id, ids],
+      );
+      await syncPackageCover(client, req.params.id);
+      return null;
+    });
+    if (result) return res.status(result.status).json({ error: result.error });
+    return res.status(204).end();
+  } catch (error) { return next(error); }
+};
+
 exports.entrepreneurPackageMedia = async (req, res, next) => {
   try {
     const result = await db.query('SELECT media_id FROM entrepreneur_packages WHERE id=$1 AND organization_id=$2', [req.params.id, req.auth.organizationId]);
