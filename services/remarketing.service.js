@@ -106,8 +106,8 @@ exports.queueCampaign = async (organizationId, input) => {
     `, [organizationId, data.columnId]);
 
     const campaign = await client.query(`
-      INSERT INTO remarketing_campaigns (organization_id, lead_column_id, body, image_media_id, image_filename, recipient_count)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO remarketing_campaigns (organization_id, lead_column_id, lead_column_name, body, image_media_id, image_filename, recipient_count)
+      VALUES ($1, $2, (SELECT name FROM lead_columns WHERE id = $2 AND organization_id = $1), $3, $4, $5, $6)
       RETURNING id
     `, [organizationId, data.columnId, data.body || null, data.mediaId || null, data.filename || null, eligible.rowCount]);
 

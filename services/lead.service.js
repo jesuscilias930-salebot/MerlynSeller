@@ -148,8 +148,17 @@ exports.removeColumn = async (organizationId, columnId) => {
       'UPDATE conversations SET lead_column_id = $1, updated_at = now() WHERE organization_id = $2 AND lead_column_id = $3',
       [replacement.rows[0].id, organizationId, columnId],
     );
+    // Los escenarios que movían leads a esta columna ahora los mueven a la de reemplazo.
+    const scenarios = await client.query(
+      "SELECT id, steps FROM automation_scenarios WHERE organization_id = $1 AND steps::text LIKE '%' || $2 || '%'",
+      [organizationId, columnId],
+    );
+    for (const scenario of scenarios.rows) {
+      const steps = (scenario.steps || []).map((step) => (step?.columnId === columnId ? { ...step, columnId: replacement.rows[0].id } : step));
+      await client.query('UPDATE automation_scenarios SET steps = $3::jsonb, updated_at = now() WHERE id = $1 AND organization_id = $2', [scenario.id, organizationId, JSON.stringify(steps)]);
+    }
     await client.query('DELETE FROM lead_columns WHERE id = $1 AND organization_id = $2', [columnId, organizationId]);
-    return { deletedId: columnId, movedLeads: moved.rowCount };
+    return { deletedId: columnId, movedLeads: moved.rowCount, replacementId: replacement.rows[0].id };
   });
   await realtime.publish(organizationId, 'lead.column_removed');
   return result;
