@@ -38,10 +38,28 @@ const validation = (schema, value) => {
   return parsed.data;
 };
 
+// Vista previa del último mensaje (enviado o recibido) como en WhatsApp: fotos, documentos,
+// plantillas y mensajes interactivos también muestran un texto aunque no tengan cuerpo.
+const PREVIEW_LABELS = { image: '📷 Foto', video: '🎥 Video', audio: '🎤 Audio', voice: '🎤 Audio', sticker: 'Sticker', document: '📄 Documento', location: '📍 Ubicación', contacts: '👤 Contacto', template: '📋 Plantilla', interactive: 'Mensaje con opciones', button: 'Respuesta', unknown: 'Mensaje' };
+const parseJson = (value) => { try { return JSON.parse(value); } catch { return null; } };
+const messagePreview = (latest) => {
+  if (!latest?.type) return null;
+  if (latest.deleted) return '🚫 Se eliminó este mensaje';
+  const body = typeof latest.body === 'string' ? latest.body.trim() : '';
+  const json = body.startsWith('{') ? parseJson(body) : null;
+  if (latest.type === 'text') return body || null;
+  if (latest.type === 'interactive') return (json ? json.body || json.text || json.header : body) || PREVIEW_LABELS.interactive;
+  if (latest.type === 'template') return json ? `📋 Plantilla${json.templateName ? `: ${json.templateName}` : ''}` : body || PREVIEW_LABELS.template;
+  if (latest.type === 'document') return `📄 ${body || latest.filename || 'Documento'}`;
+  if (['image', 'video'].includes(latest.type)) return body ? `${PREVIEW_LABELS[latest.type].split(' ')[0]} ${body}` : PREVIEW_LABELS[latest.type];
+  return (json ? null : body) || PREVIEW_LABELS[latest.type] || PREVIEW_LABELS.unknown;
+};
+exports.messagePreview = messagePreview;
+
 exports.list = async (organizationId, userId) => (await db.query(`
   SELECT c.id, c.contact_id AS "contactId", c.status, c.updated_at, c.auto_reply_enabled AS "autoReplyEnabled", c.scenario_enabled AS "scenarioEnabled", c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
-    CASE WHEN latest.direction = 'outbound' AND latest.type = 'interactive' AND left(latest.body, 1) = '{'
-      THEN COALESCE(latest.body::jsonb->>'body', latest.body) ELSE latest.body END AS last_message,
+    latest.body AS latest_body, latest.type AS latest_type, latest.filename AS latest_filename, latest.deleted AS latest_deleted,
+    latest.created_at AS "lastMessageAt",
     latest.direction AS "lastDirection",
     (c.status = 'open' AND latest.direction = 'inbound') AS "needsResponse",
     (SELECT COUNT(*)::int FROM messages m
@@ -52,11 +70,16 @@ exports.list = async (organizationId, userId) => (await db.query(`
   FROM conversations c
   JOIN contacts ct ON ct.id = c.contact_id
   LEFT JOIN LATERAL (
-    SELECT body, direction, type FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
+    -- El más reciente, enviado o recibido; con la misma hora gana el último encolado.
+    SELECT body, direction, type, filename, created_at, (deleted_at IS NOT NULL) AS deleted FROM messages WHERE conversation_id = c.id
+    ORDER BY created_at DESC, COALESCE(outbound_sequence, 0) DESC LIMIT 1
   ) latest ON true
   WHERE c.organization_id = $1
-  ORDER BY c.updated_at DESC
-`, [organizationId, userId])).rows;
+  ORDER BY COALESCE(latest.created_at, c.updated_at) DESC
+`, [organizationId, userId])).rows.map(({ latest_body: body, latest_type: type, latest_filename: filename, latest_deleted: deleted, ...row }) => ({
+  ...row,
+  last_message: messagePreview({ body, type, filename, deleted }),
+}));
 exports.messages = async (organizationId, conversationId, userId) => (await db.query(`
   SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename, m.status, m.error_code, m.provider_message_id, m.referral, m.message_metadata AS "messageMetadata", m.created_at,
     (m.deleted_at IS NOT NULL) AS "deletedForEveryone",
