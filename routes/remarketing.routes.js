@@ -9,5 +9,7 @@ router.post('/presets', controller.savePreset);
 router.delete('/presets/:id', controller.removePreset);
 router.post('/images', express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '5mb' }), controller.uploadImage);
 router.post('/campaigns', controller.send);
+router.get('/template-campaigns/preview', controller.previewTemplate);
+router.post('/template-campaigns', controller.sendTemplate);
 
 module.exports = router;

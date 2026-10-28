@@ -144,3 +144,85 @@ exports.queueCampaign = async (organizationId, input) => {
   await realtime.publish(organizationId, 'remarketing.queued');
   return { campaignId: result.campaignId, queued: result.queued, skipped: result.skipped };
 };
+
+// ---- Envío masivo con plantilla oficial ----
+// Las plantillas aprobadas llegan aunque hayan pasado las 24 h, así que se envían a todos
+// los leads de WhatsApp de la columna. Para evitar envíos dobles se omite a quien ya recibió
+// una plantilla de remarketing en las últimas 24 h, y hay un máximo por envío.
+const templateCampaignSchema = z.object({
+  columnId: z.string().uuid('Elige la columna'),
+  templateId: z.string().uuid('Elige la plantilla'),
+  manualValues: z.record(z.string(), z.string().max(1024)).default({}),
+});
+const MAX_TEMPLATE_RECIPIENTS = () => Math.max(1, Number(process.env.REMARKETING_TEMPLATE_MAX || 1000));
+const fail = (status, message) => { const error = new Error(message); error.status = status; throw error; };
+
+const templateAudience = async (client, organizationId, columnId) => (await client.query(`
+  SELECT c.id, ct.name, ct.phone_number, COALESCE(ct.channel, 'whatsapp') AS channel,
+    EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'outbound' AND m.type = 'template'
+      AND m.remarketing_campaign_id IS NOT NULL AND m.created_at > now() - interval '24 hours') AS recent
+  FROM conversations c JOIN contacts ct ON ct.id = c.contact_id
+  WHERE c.organization_id = $1 AND c.lead_column_id = $2
+  ORDER BY c.updated_at DESC
+`, [organizationId, columnId])).rows;
+
+/** Cuántos recibirían la plantilla y por qué se omite al resto. */
+const audienceSummary = (rows) => {
+  const whatsapp = rows.filter((row) => row.channel === 'whatsapp');
+  const fresh = whatsapp.filter((row) => !row.recent);
+  const max = MAX_TEMPLATE_RECIPIENTS();
+  return { total: rows.length, eligible: Math.min(fresh.length, max), otherChannel: rows.length - whatsapp.length, recent: whatsapp.length - fresh.length, overLimit: Math.max(0, fresh.length - max), max, recipients: fresh.slice(0, max) };
+};
+exports.audienceSummary = audienceSummary;
+
+exports.previewTemplateCampaign = async (organizationId, columnId) => {
+  if (!z.string().uuid().safeParse(columnId).success) fail(400, 'Elige la columna');
+  const { recipients, ...summary } = audienceSummary(await templateAudience(db, organizationId, columnId));
+  return summary;
+};
+
+exports.queueTemplateCampaign = async (organizationId, input) => {
+  const parsed = templateCampaignSchema.safeParse(input);
+  if (!parsed.success) fail(400, parsed.error.issues[0].message);
+  const { columnId, templateId, manualValues } = parsed.data;
+  const templates = require('./whatsapp-template.service');
+  const result = await db.transaction(async (client) => {
+    const column = await client.query('SELECT id FROM lead_columns WHERE id = $1 AND organization_id = $2', [columnId, organizationId]);
+    if (!column.rows[0]) fail(404, 'La columna no existe');
+    const templateRow = (await client.query("SELECT * FROM whatsapp_templates WHERE id=$1 AND organization_id=$2 AND status='APPROVED'", [templateId, organizationId])).rows[0];
+    if (!templateRow) fail(404, 'La plantilla aprobada no fue encontrada. Sincroniza tus plantillas.');
+    if ((templateRow.components || []).some((component) => String(component.type).toUpperCase() === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(String(component.format).toUpperCase())))
+      fail(400, 'Esta plantilla lleva imagen, video o documento en el encabezado; por ahora el envío masivo solo admite plantillas de texto.');
+    const summary = audienceSummary(await templateAudience(client, organizationId, columnId));
+    if (!summary.recipients.length) fail(400, 'No hay leads de WhatsApp en esa columna que puedan recibir la plantilla ahora.');
+    const prepared = [];
+    let missingData = 0;
+    let firstProblem = '';
+    for (const row of summary.recipients) {
+      try {
+        const components = templates.buildComponents(templateRow, row, manualValues);
+        prepared.push({ conversationId: row.id, body: JSON.stringify({ templateName: templateRow.name, language: templateRow.language, components, templateId: templateRow.id }) });
+      } catch (error) {
+        if (!error.status) throw error;
+        missingData += 1; firstProblem = firstProblem || error.message;
+      }
+    }
+    if (!prepared.length) fail(400, firstProblem || 'Ningún lead tiene los datos que pide la plantilla.');
+    const campaign = await client.query(`
+      INSERT INTO remarketing_campaigns (organization_id, lead_column_id, lead_column_name, body, recipient_count, template_id, template_name)
+      VALUES ($1, $2, (SELECT name FROM lead_columns WHERE id = $2 AND organization_id = $1), $3, $4, $5, $6) RETURNING id
+    `, [organizationId, columnId, `📋 Plantilla: ${templateRow.name}`, prepared.length, templateRow.id, templateRow.name]);
+    const messageIds = [];
+    for (const item of prepared) {
+      const message = await client.query(`
+        INSERT INTO messages (organization_id, conversation_id, direction, type, body, status, remarketing_campaign_id)
+        VALUES ($1, $2, 'outbound', 'template', $3, 'pending', $4) RETURNING id
+      `, [organizationId, item.conversationId, item.body, campaign.rows[0].id]);
+      messageIds.push(message.rows[0].id);
+    }
+    return { campaignId: campaign.rows[0].id, messageIds, skipped: { otherChannel: summary.otherChannel, recent: summary.recent, overLimit: summary.overLimit, missingData }, firstProblem };
+  });
+  await Promise.all(result.messageIds.map((messageId) => require('../lib/queue').outboundQueue().add('send-remarketing-template', { messageId }, { jobId: messageId })));
+  await realtime.publish(organizationId, 'remarketing.queued');
+  return { campaignId: result.campaignId, queued: result.messageIds.length, skipped: result.skipped, ...(result.skipped.missingData ? { warning: result.firstProblem } : {}) };
+};

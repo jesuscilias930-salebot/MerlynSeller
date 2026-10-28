@@ -35,6 +35,16 @@ exports.send = async (req, res, next) => {
   }
 };
 
+exports.previewTemplate = async (req, res, next) => {
+  try { return res.json(await remarketing.previewTemplateCampaign(req.auth.organizationId, req.query.columnId)); }
+  catch (error) { return handle(error, res, next); }
+};
+
+exports.sendTemplate = async (req, res, next) => {
+  try { return res.status(202).json(await remarketing.queueTemplateCampaign(req.auth.organizationId, req.body)); }
+  catch (error) { return handle(error, res, next); }
+};
+
 exports.listPresets = async (req, res, next) => {
   try {
     return res.json(await remarketing.listPresets(req.auth.organizationId));

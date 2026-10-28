@@ -81,16 +81,21 @@ exports.resolveForConversation = async (organizationId, conversationId, template
   if (!template.rows[0]) { const error = new Error('La plantilla aprobada no fue encontrada.'); error.status = 404; throw error; }
   const contact = await db.query(`SELECT ct.name,ct.phone_number FROM conversations c JOIN contacts ct ON ct.id=c.contact_id WHERE c.id=$1 AND c.organization_id=$2`, [conversationId, organizationId]);
   if (!contact.rows[0]) { const error = new Error('Conversación no encontrada.'); error.status = 404; throw error; }
-  const mappings = template.rows[0].variable_mappings || [];
-  const variables = extractVariables(template.rows[0].components || []);
+  return { template: response(template.rows[0]), phoneNumber: contact.rows[0].phone_number, components: exports.buildComponents(template.rows[0], contact.rows[0], manualValues) };
+};
+
+/** Parámetros de la plantilla para un contacto: nombre, teléfono, texto fijo o valores escritos al enviar. */
+exports.buildComponents = (templateRow, contact, manualValues = {}) => {
+  const mappings = templateRow.variable_mappings || [];
+  const variables = extractVariables(templateRow.components || []);
   const mappingByKey = new Map(mappings.map(mapping => [`${mapping.component}:${mapping.position}`, mapping]));
   const byComponent = new Map();
   for (const variable of variables) {
     const mapping = mappingByKey.get(`${variable.component}:${variable.position}`);
     if (!mapping) { const error = new Error(`Configura la variable {{${variable.position}}} del ${variable.component}.`); error.status = 400; throw error; }
     const key = `${variable.component}:${variable.position}`;
-    const value = mapping.source === 'contact.name' ? contact.rows[0].name
-      : mapping.source === 'contact.phone' ? contact.rows[0].phone_number
+    const value = mapping.source === 'contact.name' ? contact.name
+      : mapping.source === 'contact.phone' ? contact.phone_number
         : mapping.source === 'fixed' ? mapping.value
           : manualValues[key];
     if (!String(value || '').trim()) { const error = new Error(`Falta el valor para ${mapping.label || `{{${variable.position}}}`}.`); error.status = 400; throw error; }
@@ -98,9 +103,9 @@ exports.resolveForConversation = async (organizationId, conversationId, template
     current.push({ position: variable.position, value: String(value).trim() });
     byComponent.set(variable.component, current);
   }
-  const components = [...byComponent.entries()].map(([type, values]) => ({ type, parameters: values.sort((a, b) => a.position - b.position).map(item => ({ type: 'text', text: item.value })) }));
-  return { template: response(template.rows[0]), phoneNumber: contact.rows[0].phone_number, components };
+  return [...byComponent.entries()].map(([type, values]) => ({ type, parameters: values.sort((a, b) => a.position - b.position).map(item => ({ type: 'text', text: item.value })) }));
 };
+exports.templateResponse = (row) => response(row);
 
 // Variables de plantilla que salen de un recordatorio (nombre, productos, fecha acordada).
 const REMINDER_SOURCES = ['reminder.name', 'reminder.products', 'reminder.agreed_date', 'fixed'];
