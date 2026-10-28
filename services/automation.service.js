@@ -173,9 +173,13 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   // tipo de mensaje del cliente). Si así se configuró, nada más contesta.
   const afterHours = await businessHours.handleIncoming(organizationId, conversationId, message);
   if (afterHours.handled) return;
+  // Respuestas rápidas de una plantilla (p. ej. «Sí, quiero ver el catálogo») llegan como
+  // type «button»: se tratan igual que una opción tocada para que inicien escenarios.
   const optionReply = message.type === 'interactive'
     ? message.interactive?.button_reply || message.interactive?.list_reply
-    : null;
+    : message.type === 'button' && (message.button?.text || message.button?.payload)
+      ? { id: message.button.payload || undefined, title: message.button.text || message.button.payload }
+      : null;
   if (message.type !== 'text' && !optionReply) return;
   const [conversation, intents] = await Promise.all([db.query('SELECT auto_reply_enabled FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]), exports.list(organizationId)]);
   if (!conversation.rows[0]?.auto_reply_enabled) return;

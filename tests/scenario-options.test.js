@@ -150,3 +150,21 @@ test('una opción que lleva a «Esperar respuesta» se evalúa con sus respuesta
     assert.equal(waitingAt, null);
   } finally { db.query = original.query; conversations.queueText = original.queueText; }
 });
+
+test('la respuesta rápida de una plantilla inicia el escenario cuyas frases coinciden', async () => {
+  const automations = require('../services/automation.service');
+  const leads = require('../services/lead.service');
+  const original = { query: db.query, option: scenarios.processOptionReply, incoming: scenarios.processIncoming, attention: leads.moveToAttention };
+  const started = []; let escalated = false;
+  db.query = async (sql) => sql.includes('auto_reply_enabled') ? { rows: [{ auto_reply_enabled: true }] } : { rows: [] };
+  scenarios.processOptionReply = async () => ({ handled: false });
+  scenarios.processIncoming = async (...args) => { started.push(args); return { handled: args[2].includes('catalogo') }; };
+  leads.moveToAttention = async () => { escalated = true; return true; };
+  try {
+    await automations.processIncoming('org', 'conv', { id: 'wamid.3', type: 'button', button: { text: 'Sí, quiero ver el catalogo', payload: 'Sí, quiero ver el catalogo' } });
+    assert.deepEqual(started[0], ['org', 'conv', 'si quiero ver el catalogo']);
+    assert.equal(escalated, false);
+    await automations.processIncoming('org', 'conv', { id: 'wamid.4', type: 'button', button: { text: 'No, gracias', payload: 'No, gracias' } });
+    assert.equal(escalated, true, 'una respuesta sin escenario la atiende una persona');
+  } finally { Object.assign(scenarios, { processOptionReply: original.option, processIncoming: original.incoming }); db.query = original.query; leads.moveToAttention = original.attention; }
+});
