@@ -54,6 +54,8 @@ exports.board = async (organizationId, userId) => {
       ct.name,
       latest.body AS last_message,
       latest.direction AS "lastDirection",
+      c.column_pinned_at AS "columnPinnedAt",
+      (SELECT name FROM column_rules rule WHERE rule.id = c.column_pinned_rule_id) AS "columnPinnedRule",
       (c.status = 'open' AND latest.direction = 'inbound') AS "needsResponse",
       (SELECT COUNT(*)::int FROM messages m
         WHERE m.conversation_id = c.id
@@ -145,7 +147,7 @@ exports.removeColumn = async (organizationId, columnId) => {
       throw error;
     }
     const moved = await client.query(
-      'UPDATE conversations SET lead_column_id = $1, updated_at = now() WHERE organization_id = $2 AND lead_column_id = $3',
+      'UPDATE conversations SET lead_column_id = $1, column_pinned_at = NULL, column_pinned_rule_id = NULL, updated_at = now() WHERE organization_id = $2 AND lead_column_id = $3',
       [replacement.rows[0].id, organizationId, columnId],
     );
     // Los escenarios que movían leads a esta columna ahora los mueven a la de reemplazo.
@@ -177,7 +179,8 @@ exports.move = async (organizationId, conversationId, input) => {
       throw error;
     }
     const conversation = await client.query(
-      'UPDATE conversations SET lead_column_id = $3, updated_at = now() WHERE id = $1 AND organization_id = $2 RETURNING id, lead_column_id',
+      // Mover a mano libera el lead si una regla lo había fijado en su columna.
+      'UPDATE conversations SET lead_column_id = $3, column_pinned_at = NULL, column_pinned_rule_id = NULL, updated_at = now() WHERE id = $1 AND organization_id = $2 RETURNING id, lead_column_id',
       [conversationId, organizationId, data.columnId],
     );
     if (!conversation.rows[0]) {
@@ -210,7 +213,7 @@ exports.moveAllFromColumn = async (organizationId, sourceColumnId, input) => {
     }
     const moved = await client.query(
       `UPDATE conversations
-       SET lead_column_id=$3, updated_at=now()
+       SET lead_column_id=$3, column_pinned_at=NULL, column_pinned_rule_id=NULL, updated_at=now()
        WHERE organization_id=$1 AND lead_column_id=$2`,
       [organizationId, sourceColumnId, data.targetColumnId],
     );
@@ -223,6 +226,18 @@ exports.moveAllFromColumn = async (organizationId, sourceColumnId, input) => {
 // An unmatched customer message should be visible to a human. The column is
 // intentionally looked up by name so each organization retains control of its
 // own pipeline IDs and can still rename/reorder all other columns freely.
+// Movimiento automático: respeta los leads fijados por una regla de columna.
+const autoMove = async (organizationId, conversationId, columnId) => {
+  const moved = await db.query(
+    'UPDATE conversations SET lead_column_id=$3, updated_at=now() WHERE id=$1 AND organization_id=$2 AND column_pinned_at IS NULL RETURNING id',
+    [conversationId, organizationId, columnId],
+  );
+  if (!moved.rows[0]) return false;
+  await realtime.publish(organizationId, 'lead.moved', conversationId);
+  return true;
+};
+exports.autoMove = autoMove;
+
 exports.moveToAttention = async (organizationId, conversationId) => {
   const columns = await db.query(
     'SELECT id, name FROM lead_columns WHERE organization_id=$1',
@@ -230,8 +245,7 @@ exports.moveToAttention = async (organizationId, conversationId) => {
   );
   const target = columns.rows.find((column) => normalizedColumnName(column.name) === 'requiereatencion');
   if (!target) return false;
-  await exports.move(organizationId, conversationId, { columnId: target.id });
-  return true;
+  return autoMove(organizationId, conversationId, target.id);
 };
 
 // R-HOT is a commercial outcome, not an automation state: a customer who
@@ -243,6 +257,5 @@ exports.moveToRemarketingHot = async (organizationId, conversationId) => {
   if (!target) return false;
   const current = await db.query('SELECT lead_column_id FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]);
   if (!current.rows[0] || current.rows[0].lead_column_id === target.id) return false;
-  await exports.move(organizationId, conversationId, { columnId: target.id });
-  return true;
+  return autoMove(organizationId, conversationId, target.id);
 };

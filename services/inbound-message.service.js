@@ -1,6 +1,7 @@
 const db = require('../lib/db');
 const realtime = require('../lib/realtime');
 const conversations = require('./conversation.service');
+const columnRules = require('./column-rule.service');
 const leads = require('./lead.service');
 const automations = require('./automation.service');
 const metaConversions = require('./meta-conversions.service');
@@ -232,6 +233,10 @@ exports.process = async (payload) => {
           // CAPI reporting is intentionally isolated from message processing:
           // an unavailable Meta endpoint can never prevent a chat from being stored.
           await metaConversions.captureInboundReferral(account.rows[0].organization_id, stored.conversationId, message);
+          // «Si llega este mensaje → mover a esta columna»: va antes que las automatizaciones,
+          // y una falla aquí nunca impide que el bot responda.
+          try { await columnRules.applyIncoming(account.rows[0].organization_id, stored.conversationId, message); }
+          catch (error) { console.error(JSON.stringify({ level: 'error', message: 'Column rules failed', conversationId: stored.conversationId, errorMessage: error.message })); }
           await automations.processIncoming(account.rows[0].organization_id, stored.conversationId, message);
           // Keep commercial engagement visible even if the automation also
           // escalates an unmatched message to the human-attention column.
