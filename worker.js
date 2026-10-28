@@ -133,7 +133,7 @@ const outbound = new Worker('outbound-messages', async (job) => {
   }
   if (!conversationId) return;
   await drainConversation(conversationId, job.id);
-}, { connection: connection(), concurrency: Number(process.env.WORKER_CONCURRENCY || 5) });
+}, { connection: connection(), concurrency: Number(process.env.WORKER_CONCURRENCY || 5), autorun: false });
 
 outbound.on('failed', (job, error) => console.error(JSON.stringify({ level: 'error', queue: 'outbound-messages', jobId: job?.id, errorType: error.name })));
 
@@ -147,11 +147,19 @@ const inbound = new Worker('inbound-webhooks', async (job) => {
 
   console.log(JSON.stringify({ level: 'info', message: 'Inbound webhook processed', jobId: job.id }));
 
-}, { connection: connection(), concurrency: Number(process.env.WORKER_CONCURRENCY || 5) });
+}, { connection: connection(), concurrency: Number(process.env.WORKER_CONCURRENCY || 5), autorun: false });
 
 
 inbound.on('failed', (job, error) => console.error(JSON.stringify({ level: 'error', queue: 'inbound-webhooks', jobId: job?.id, errorType: error.name })));
-console.log(JSON.stringify({ level: 'info', message: 'Worker listening for outbound messages' }));
+// Al desplegar, la API aplica las migraciones mientras el worker ya arranca. Para no procesar
+// mensajes con un esquema viejo (y perderlos), se espera a que todas estén aplicadas;
+// mientras tanto los trabajos se quedan en la cola de Redis.
+const waitForMigrations = require('./lib/migration-wait');
+waitForMigrations(db).finally(() => {
+  void outbound.run();
+  void inbound.run();
+  console.log(JSON.stringify({ level: 'info', message: 'Worker listening for outbound messages' }));
+});
 
 // Recordatorios: cada 30 s publica en el chat interno los que ya llegaron a su hora.
 const reminderService = require('./services/reminder.service');
