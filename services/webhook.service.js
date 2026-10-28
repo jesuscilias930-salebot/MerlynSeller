@@ -40,8 +40,10 @@ exports.summarizeEvent = (body) => {
   const values = changes.map((change) => change?.value || {});
   const messages = values.flatMap((value) => value.messages || []);
   const statuses = values.flatMap((value) => value.statuses || []);
+  const messaging = (body?.entry || []).flatMap((entry) => entry?.messaging || []);
   return {
     object: body?.object || 'unknown',
+    messagingEvents: messaging.length,
     entries: body?.entry?.length || 0,
     changes: changes.length,
     incomingMessages: messages.length,

@@ -47,6 +47,14 @@ services:
         sync: false
       - key: WHATSAPP_GRAPH_API_VERSION
         sync: false
+      - key: META_PAGE_ID
+        sync: false
+      - key: META_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: META_INSTAGRAM_ACCOUNT_ID
+        sync: false
+      - key: META_PAGE_ORGANIZATION_ID
+        sync: false
       - key: META_CAPI_ENABLED
         sync: false
       - key: META_CAPI_ACCESS_TOKEN
@@ -94,6 +102,14 @@ services:
       - key: WHATSAPP_PHONE_NUMBER_ID
         sync: false
       - key: WHATSAPP_GRAPH_API_VERSION
+        sync: false
+      - key: META_PAGE_ID
+        sync: false
+      - key: META_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: META_INSTAGRAM_ACCOUNT_ID
+        sync: false
+      - key: META_PAGE_ORGANIZATION_ID
         sync: false
       - key: META_CAPI_ENABLED
         sync: false

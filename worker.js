@@ -3,6 +3,7 @@ const { Worker } = require('bullmq');
 const { connection, outboundQueue } = require('./lib/queue');
 const db = require('./lib/db');
 const messageService = require('./services/message.service');
+const metaMessaging = require('./services/meta-messaging.service');
 const inboundMessageService = require('./services/inbound-message.service');
 const realtime = require('./lib/realtime');
 
@@ -12,8 +13,11 @@ const outboundRedis = connection();
 
 const pendingMessage = async (conversationId) => (await db.query(`
   SELECT m.id, m.type, m.body, m.media_id, m.filename, m.organization_id, m.conversation_id,
-    m.outbound_sequence, c.phone_number,
-    replied.provider_message_id AS reply_to_provider_message_id
+    m.outbound_sequence, c.phone_number, c.channel, c.external_id,
+    replied.provider_message_id AS reply_to_provider_message_id,
+    (SELECT max(created_at) FROM messages i WHERE i.conversation_id = m.conversation_id AND i.direction = 'inbound') AS last_inbound_at,
+    EXISTS (SELECT 1 FROM messages i WHERE i.conversation_id = m.conversation_id AND i.direction = 'inbound' AND i.referral IS NOT NULL
+      AND i.created_at > now() - interval '7 days') AS from_ad
   FROM messages m
   JOIN conversations cv ON cv.id = m.conversation_id
   JOIN contacts c ON c.id = cv.contact_id
@@ -33,7 +37,9 @@ const sendInteractive = (message) => {
     : messageService.sendCtaUrl({ ...data, to: message.phone_number });
 };
 
-const send = (message) => message.type === 'document'
+const send = (message) => message.channel && message.channel !== 'whatsapp'
+  ? metaMessaging.send(message)
+  : message.type === 'document'
   ? messageService.sendAttachment({ to: message.phone_number, type: 'document', id: message.media_id, filename: message.filename || undefined, caption: message.body || undefined })
   : message.type === 'image'
     ? messageService.sendAttachment({ to: message.phone_number, type: 'image', id: message.media_id, caption: message.body || undefined })

@@ -58,6 +58,7 @@ exports.messagePreview = messagePreview;
 
 exports.list = async (organizationId, userId) => (await db.query(`
   SELECT c.id, c.contact_id AS "contactId", c.status, c.updated_at, c.auto_reply_enabled AS "autoReplyEnabled", c.scenario_enabled AS "scenarioEnabled", c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
+    ct.channel, ct.username,
     latest.body AS latest_body, latest.type AS latest_type, latest.filename AS latest_filename, latest.deleted AS latest_deleted,
     latest.created_at AS "lastMessageAt",
     latest.direction AS "lastDirection",
@@ -101,8 +102,9 @@ exports.messages = async (organizationId, conversationId, userId) => (await db.q
 exports.deleteMessage = async (organizationId, conversationId, userId, messageId, scope) => {
   const data = validation(z.object({ scope: z.enum(['for_me', 'for_everyone']) }), { scope });
   const message = (await db.query(
-    `SELECT id,direction,status,provider_message_id AS "providerMessageId",deleted_at AS "deletedAt"
-     FROM messages WHERE id=$1 AND organization_id=$2 AND conversation_id=$3`,
+    `SELECT m.id,m.direction,m.status,m.provider_message_id AS "providerMessageId",m.deleted_at AS "deletedAt",ct.channel
+     FROM messages m JOIN conversations cv ON cv.id=m.conversation_id JOIN contacts ct ON ct.id=cv.contact_id
+     WHERE m.id=$1 AND m.organization_id=$2 AND m.conversation_id=$3`,
     [messageId, organizationId, conversationId],
   )).rows[0];
   if (!message) { const error = new Error('Message not found'); error.status = 404; throw error; }
@@ -120,6 +122,11 @@ exports.deleteMessage = async (organizationId, conversationId, userId, messageId
     throw error;
   }
   if (message.deletedAt) return { scope: data.scope, deleted: true };
+  if (message.status !== 'pending' && message.channel && message.channel !== 'whatsapp') {
+    const error = new Error('Messenger e Instagram no permiten eliminar para todos un mensaje ya enviado');
+    error.status = 400;
+    throw error;
+  }
   if (message.status !== 'pending') {
     if (!message.providerMessageId) {
       const error = new Error('El mensaje todavía no está disponible para eliminarse en WhatsApp');
@@ -140,7 +147,7 @@ exports.deleteMessage = async (organizationId, conversationId, userId, messageId
 exports.reactToMessage = async (organizationId, conversationId, messageId, input) => {
   const data = validation(reactionSchema, input);
   const target = await db.query(
-    `SELECT message.provider_message_id, contact.phone_number
+    `SELECT message.provider_message_id, contact.phone_number, contact.channel
      FROM messages message
      JOIN conversations conversation ON conversation.id=message.conversation_id
      JOIN contacts contact ON contact.id=conversation.contact_id
@@ -150,6 +157,11 @@ exports.reactToMessage = async (organizationId, conversationId, messageId, input
   );
   if (!target.rows[0]?.provider_message_id) {
     const error = new Error('Solo puedes reaccionar a un mensaje recibido que ya esté disponible en WhatsApp');
+    error.status = 400;
+    throw error;
+  }
+  if (target.rows[0].channel && target.rows[0].channel !== 'whatsapp') {
+    const error = new Error('Las reacciones desde MerlynSeller solo están disponibles en WhatsApp');
     error.status = 400;
     throw error;
   }
@@ -436,6 +448,12 @@ exports.media = async (organizationId, conversationId, messageId) => {
     const error = new Error('Media not found');
     error.status = 404;
     throw error;
+  }
+  // Messenger/Instagram guardan la URL del archivo (caduca después de unos días).
+  if (/^https:\/\//i.test(result.rows[0].media_id)) {
+    const response = await fetch(result.rows[0].media_id, { signal: AbortSignal.timeout(20000) }).catch(() => null);
+    if (!response?.ok) { const error = new Error('El archivo ya no está disponible en Meta'); error.status = 404; throw error; }
+    return { contentType: response.headers.get('content-type') || 'application/octet-stream', buffer: Buffer.from(await response.arrayBuffer()) };
   }
   return messageService.downloadMedia(result.rows[0].media_id);
 };

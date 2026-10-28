@@ -5,6 +5,7 @@ const columnRules = require('./column-rule.service');
 const leads = require('./lead.service');
 const automations = require('./automation.service');
 const metaConversions = require('./meta-conversions.service');
+const metaMessaging = require('./meta-messaging.service');
 
 const text = (value, max = 1024) => typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined;
 const number = (value) => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
@@ -123,17 +124,19 @@ const marketingReply = async (client, organizationId, conversationId, repliedPro
   return Boolean(latestOutbound.rows[0]);
 };
 
-const saveMessage = async (organizationId, message, contactName) => {
+// identity: para Messenger/Instagram, { channel, externalId, username }; WhatsApp usa el teléfono.
+const saveMessage = async (organizationId, message, contactName, identity = null) => {
   if (!message.id || !message.from) return;
   const result = await db.transaction(async (client) => {
     const contact = await client.query(
-      `INSERT INTO contacts (organization_id, phone_number, name)
-       VALUES ($1, $2, $3)
+      `INSERT INTO contacts (organization_id, phone_number, name, channel, external_id, username)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (organization_id, phone_number) DO UPDATE SET
          name = COALESCE(EXCLUDED.name, contacts.name),
+         username = COALESCE(EXCLUDED.username, contacts.username),
          updated_at = now()
        RETURNING id`,
-      [organizationId, message.from, contactName || null],
+      [organizationId, message.from, contactName || null, identity?.channel || 'whatsapp', identity?.externalId || null, identity?.username || null],
     );
     const initialColumnId = await leads.initialColumnId(client, organizationId);
     const conversation = await client.query("INSERT INTO conversations (organization_id, contact_id, lead_column_id) VALUES ($1, $2, $3) ON CONFLICT (organization_id, contact_id) DO UPDATE SET updated_at = now(), status = 'open', lead_column_id = COALESCE(conversations.lead_column_id, EXCLUDED.lead_column_id) RETURNING id", [organizationId, contact.rows[0].id, initialColumnId]);
@@ -209,7 +212,52 @@ const updateStatus = async (status) => {
   }
 };
 
+// Messenger e Instagram: los eventos llegan en entry[].messaging y se guardan como mensajes del mismo inbox.
+const processMetaMessaging = async (payload) => {
+  const channel = metaMessaging.channelFor(payload.object);
+  for (const entry of payload.entry || []) {
+    let organizationId;
+    try { organizationId = await metaMessaging.organizationFor(String(entry.id)); }
+    catch (error) { console.warn(JSON.stringify({ level: 'warn', message: 'Messenger/Instagram webhook ignored', reason: error.message })); return; }
+    if (!organizationId) { console.warn(JSON.stringify({ level: 'warn', message: 'Webhook ignored: page or Instagram account is not connected', channel })); continue; }
+    for (const event of entry.messaging || []) {
+      for (const update of metaMessaging.statusUpdates(event)) {
+        if (update.id) await updateStatus(update);
+        else if (update.watermark) await markReadUntil(organizationId, channel, update.sender, update.watermark);
+      }
+      const messages = metaMessaging.normalizeEvent(event, channel);
+      if (!messages.length) continue;
+      const externalId = event.sender.id;
+      const known = await db.query('SELECT name FROM contacts WHERE organization_id=$1 AND phone_number=$2', [organizationId, metaMessaging.contactKey(channel, externalId)]);
+      const profile = known.rows[0]?.name ? { name: null, username: null } : await metaMessaging.profile(channel, externalId);
+      for (const message of messages) {
+        const stored = await saveMessage(organizationId, message, profile.name, { channel, externalId, username: profile.username });
+        if (stored?.inserted && !stored.isReaction) {
+          try { await columnRules.applyIncoming(organizationId, stored.conversationId, message); }
+          catch (error) { console.error(JSON.stringify({ level: 'error', message: 'Column rules failed', conversationId: stored.conversationId, errorMessage: error.message })); }
+          await automations.processIncoming(organizationId, stored.conversationId, message);
+        }
+      }
+    }
+  }
+};
+// Messenger avisa lecturas con una marca de tiempo: todo lo enviado antes ya se leyó.
+const markReadUntil = async (organizationId, channel, sender, watermark) => {
+  if (!sender || !Number.isFinite(watermark)) return;
+  const result = await db.query(
+    `UPDATE messages m SET status='read', updated_at=now()
+     FROM conversations cv JOIN contacts ct ON ct.id=cv.contact_id
+     WHERE m.conversation_id=cv.id AND cv.organization_id=$1 AND ct.phone_number=$2 AND m.direction='outbound'
+       AND m.status IN ('sent','delivered') AND m.created_at <= to_timestamp($3 / 1000.0)
+     RETURNING m.conversation_id`,
+    [organizationId, metaMessaging.contactKey(channel, sender), watermark],
+  );
+  if (result.rows[0]) await realtime.publish(organizationId, 'message.status_updated', result.rows[0].conversation_id);
+};
+exports.processMetaMessaging = processMetaMessaging;
+
 exports.process = async (payload) => {
+  if (metaMessaging.channelFor(payload?.object)) return processMetaMessaging(payload);
   for (const entry of payload.entry || []) {
     for (const change of entry.changes || []) {
       const value = change.value || {};

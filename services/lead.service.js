@@ -52,6 +52,8 @@ exports.board = async (organizationId, userId) => {
       c.updated_at,
       ct.phone_number,
       ct.name,
+      ct.channel,
+      ct.username,
       latest.body AS last_message,
       latest.direction AS "lastDirection",
       c.column_pinned_at AS "columnPinnedAt",
