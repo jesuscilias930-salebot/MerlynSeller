@@ -686,6 +686,8 @@ const run = async (
   scenario,
   stepId,
   depth = 0,
+  // resendCatalog: el cliente pidió el catálogo con un botón; se envía aunque ya lo tenga.
+  runOptions = {},
 ) => {
   if (depth > 12) {
     const error = new Error(
@@ -722,7 +724,7 @@ const run = async (
       organizationId,
       conversationId,
       step.caption,
-      step.resendCatalog === true,
+      step.resendCatalog === true || runOptions.resendCatalog === true,
     );
     if (!sent)
       await conversations.queueText(organizationId, conversationId, {
@@ -761,6 +763,7 @@ const run = async (
       scenario,
       step.nextStepId,
       depth + 1,
+      runOptions,
     );
   return complete(organizationId, conversationId);
 };
@@ -816,7 +819,7 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
     }
     if (newStart && newStart.key !== scenario.key && (newStart.canInterrupt || options.explicit)) {
       await complete(organizationId, conversationId);
-      await run(organizationId, conversationId, newStart, newStart.steps[0].id);
+      await run(organizationId, conversationId, newStart, newStart.steps[0].id, 0, { resendCatalog: options.explicit === true });
       log("info", "Conversation scenario replaced", { from: scenario.key, to: newStart.key });
       return { handled: true, requiresHuman: false };
     }
@@ -852,7 +855,7 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
     // lo vuelve a empezar en lugar de tratarse como respuesta al paso donde se quedó.
     if (options.explicit && newStart && newStart.key === scenario.key) {
       await complete(organizationId, conversationId);
-      await run(organizationId, conversationId, newStart, newStart.steps[0].id);
+      await run(organizationId, conversationId, newStart, newStart.steps[0].id, 0, { resendCatalog: options.explicit === true });
       log("info", "Conversation scenario restarted by option reply", { scenario: scenario.key, step: step.id });
       return { handled: true, requiresHuman: false };
     }
@@ -882,7 +885,7 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
   }
 
   if (!newStart) return { handled: false, requiresHuman: false };
-  await run(organizationId, conversationId, newStart, newStart.steps[0].id);
+  await run(organizationId, conversationId, newStart, newStart.steps[0].id, 0, { resendCatalog: options.explicit === true });
   log("info", "Conversation scenario started", { scenario: newStart.key });
   return { handled: true, requiresHuman: false };
 };

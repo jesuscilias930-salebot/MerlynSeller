@@ -252,3 +252,30 @@ test('sin escenario, el botón de la plantilla usa la automatización de catálo
     assert.deepEqual(texts, []);
   } finally { db.query = original.query; conversations.queueDocument = original.doc; conversations.queueText = original.text; scenarios.list = original.list; }
 });
+
+test('el botón de la plantilla reenvía el catálogo del escenario aunque el cliente ya lo tenga', async () => {
+  const flow = scenarios.parseDefinition({ name: 'Catálogo', triggerExamples: ['Sí, quiero ver el catálogo'], steps: [
+    { id: 'cat', type: 'send_catalog', label: 'Catálogo', nextStepId: 'fin' }, { id: 'fin', type: 'end', label: 'Fin' },
+  ] });
+  const rows = [{ ...flow, id: 'c', key: 'catalogo', isActive: true, canInterrupt: false, position: 0, priority: 0 }];
+  const original = { query: db.query, doc: conversations.queueDocument, text: conversations.queueText, list: scenarios.list };
+  const docs = []; const texts = [];
+  db.query = async (sql) => {
+    if (sql.includes('auto_reply_enabled')) return { rows: [{ auto_reply_enabled: true }] };
+    if (sql.includes('scenario_enabled')) return { rows: [{ scenario_enabled: true }] };
+    if (sql.includes('SELECT media_id,filename FROM catalog_documents')) return { rows: [{ media_id: 'media1', filename: 'catalogo.pdf' }] };
+    if (sql.includes('AS sent')) return { rows: [{ sent: true }] };
+    return { rows: [] };
+  };
+  scenarios.list = async () => rows;
+  conversations.queueDocument = async (...args) => { docs.push(args[2].mediaId); return {}; };
+  conversations.queueText = async (...args) => { texts.push(args[2].body); return {}; };
+  try {
+    await require('../services/automation.service').processIncoming('org', 'conv', { id: 'wamid.30', type: 'button', button: { text: 'Sí, quiero ver el catálogo' } });
+    assert.deepEqual(docs, ['media1']);
+    assert.deepEqual(texts, []);
+    docs.length = 0;
+    await scenarios.processIncoming('org', 'conv', 'si quiero ver el catalogo');
+    assert.deepEqual(docs, [], 'escrito a mano respeta «ya está en la conversación»');
+  } finally { db.query = original.query; conversations.queueDocument = original.doc; conversations.queueText = original.text; scenarios.list = original.list; }
+});
