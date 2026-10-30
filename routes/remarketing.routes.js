@@ -11,5 +11,7 @@ router.post('/images', express.raw({ type: ['image/jpeg', 'image/png', 'image/we
 router.post('/campaigns', controller.send);
 router.get('/template-campaigns/preview', controller.previewTemplate);
 router.post('/template-campaigns', controller.sendTemplate);
+router.get('/template-replies/pending', controller.pendingTemplateReplies);
+router.post('/template-replies/reprocess', controller.reprocessTemplateReplies);
 
 module.exports = router;

@@ -162,9 +162,32 @@ test('la respuesta rápida de una plantilla inicia el escenario cuyas frases coi
   leads.moveToAttention = async () => { escalated = true; return true; };
   try {
     await automations.processIncoming('org', 'conv', { id: 'wamid.3', type: 'button', button: { text: 'Sí, quiero ver el catalogo', payload: 'Sí, quiero ver el catalogo' } });
-    assert.deepEqual(started[0], ['org', 'conv', 'si quiero ver el catalogo']);
+    assert.deepEqual(started[0], ['org', 'conv', 'si quiero ver el catalogo', { explicit: true }]);
     assert.equal(escalated, false);
     await automations.processIncoming('org', 'conv', { id: 'wamid.4', type: 'button', button: { text: 'No, gracias', payload: 'No, gracias' } });
     assert.equal(escalated, true, 'una respuesta sin escenario la atiende una persona');
   } finally { Object.assign(scenarios, { processOptionReply: original.option, processIncoming: original.incoming }); db.query = original.query; leads.moveToAttention = original.attention; }
+});
+
+test('un escenario viejo que ya no espera respuesta no bloquea el botón de la plantilla', async () => {
+  const automations = require('../services/automation.service');
+  const flow = scenarios.parseDefinition({ name: 'Catálogo por plantilla', triggerExamples: ['Sí, quiero ver el catálogo'], steps: [{ id: 'hola', type: 'send_text', label: 'Saludo', body: 'Aquí va', nextStepId: 'fin' }, { id: 'fin', type: 'end', label: 'Fin' }] });
+  const catalogo = { ...flow, id: 's2', key: 'catalogo', isActive: true, canInterrupt: false, position: 1, priority: 0 };
+  const calls = [];
+  const original = { query: db.query, text: conversations.queueText, list: scenarios.list };
+  db.query = async (sql, args) => {
+    calls.push(sql);
+    if (sql.includes('auto_reply_enabled')) return { rows: [{ auto_reply_enabled: true }] };
+    if (sql.includes('scenario_enabled')) return { rows: [{ scenario_enabled: true }] };
+    if (sql.includes('FROM conversation_scenario_states')) return { rows: [{ scenario_key: 'borrado', step: 'x' }] };
+    return { rows: [] };
+  };
+  scenarios.list = async () => [catalogo];
+  const sent = [];
+  conversations.queueText = async (...args) => { sent.push(args[2].body); return {}; };
+  try {
+    await automations.processIncoming('org', 'conv', { id: 'wamid.9', type: 'button', button: { text: 'Sí, quiero ver el catálogo' } });
+    assert.ok(calls.some((sql) => sql.includes('SET completed_at=now()')), 'cierra el escenario viejo');
+    assert.deepEqual(sent, ['Aquí va']);
+  } finally { db.query = original.query; conversations.queueText = original.text; scenarios.list = original.list; }
 });

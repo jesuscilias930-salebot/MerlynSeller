@@ -765,7 +765,9 @@ const run = async (
   return complete(organizationId, conversationId);
 };
 
-exports.processIncoming = async (organizationId, conversationId, incoming) => {
+// options.explicit: el cliente tocó un botón (p. ej. la respuesta rápida de una plantilla).
+// Es una intención clara, así que puede reemplazar el escenario en curso aunque no admita interrupciones.
+exports.processIncoming = async (organizationId, conversationId, incoming, options = {}) => {
   const text = normalize(incoming);
   if (!text) return { handled: false, requiresHuman: false };
   const [states, scenarios, conversation] = await Promise.all([
@@ -775,15 +777,25 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
   ]);
   if (conversation.rows[0]?.scenario_enabled === false) return { handled: false, requiresHuman: false };
   const active = scenarios.filter((scenario) => scenario.isActive);
-  const state = states.rows[0];
   const rankedStarts = active.map((scenario) => ({ scenario, value: score(text, scenario.triggerExamples) })).sort((a, b) => b.value - a.value || a.scenario.position - b.scenario.position || b.scenario.priority - a.scenario.priority);
   let newStart = rankedStarts[0]?.value >= 0.72 ? rankedStarts[0].scenario : null;
   if (!newStart) newStart = await aiMatchScenario(text, active);
 
+  let state = states.rows[0];
   if (state) {
     const scenario = active.find((item) => item.key === state.scenario_key);
     const step = scenario && byId(scenario, state.step);
-    if (!scenario || !step || !["wait_reply", "budget_recommendation", "send_options"].includes(step.type)) return { handled: false, requiresHuman: false };
+    // Un escenario pausado/borrado o un paso que ya no espera respuesta no debe bloquear para siempre
+    // a la conversación: se cierra y el mensaje puede iniciar otro escenario.
+    if (!scenario || !step || !["wait_reply", "budget_recommendation", "send_options"].includes(step.type)) {
+      await complete(organizationId, conversationId);
+      log("info", "Stale conversation scenario closed", { scenario: state.scenario_key, step: state.step });
+      state = null;
+    }
+  }
+  if (state) {
+    const scenario = active.find((item) => item.key === state.scenario_key);
+    const step = byId(scenario, state.step);
     if (step.type === "send_options") {
       const option = optionForReply(step, incoming);
       if (option) {
@@ -792,7 +804,7 @@ exports.processIncoming = async (organizationId, conversationId, incoming) => {
         return { handled: true, requiresHuman: false };
       }
     }
-    if (newStart && newStart.key !== scenario.key && newStart.canInterrupt) {
+    if (newStart && newStart.key !== scenario.key && (newStart.canInterrupt || options.explicit)) {
       await complete(organizationId, conversationId);
       await run(organizationId, conversationId, newStart, newStart.steps[0].id);
       log("info", "Conversation scenario replaced", { from: scenario.key, to: newStart.key });

@@ -45,6 +45,16 @@ exports.sendTemplate = async (req, res, next) => {
   catch (error) { return handle(error, res, next); }
 };
 
+exports.pendingTemplateReplies = async (req, res, next) => {
+  try { return res.json(await remarketing.pendingTemplateReplies(req.auth.organizationId, req.query)); }
+  catch (error) { return handle(error, res, next); }
+};
+
+exports.reprocessTemplateReplies = async (req, res, next) => {
+  try { return res.json(await remarketing.reprocessTemplateReplies(req.auth.organizationId, req.body)); }
+  catch (error) { return handle(error, res, next); }
+};
+
 exports.listPresets = async (req, res, next) => {
   try {
     return res.json(await remarketing.listPresets(req.auth.organizationId));

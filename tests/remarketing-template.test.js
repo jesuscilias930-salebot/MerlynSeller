@@ -45,3 +45,24 @@ test('encola la plantilla con el nombre de cada lead y omite a quien no tiene el
     assert.equal(jobs.length, 1);
   } finally { db.transaction = original.transaction; queue.outboundQueue = original.queue; realtime.publish = original.publish; }
 });
+
+test('vuelve a atender las respuestas a plantillas que quedaron sin respuesta', async () => {
+  const automations = require('../services/automation.service');
+  const original = { query: db.query, process: automations.processIncoming, publish: realtime.publish };
+  const processed = []; let outbound = 0;
+  db.query = async (sql) => {
+    if (sql.includes('JOIN LATERAL')) return { rows: [
+      { conversationId: 'c1', botEnabled: true, scenariosEnabled: true, messageId: 'wamid.1', type: 'button', body: 'Sí, quiero ver el catálogo', metadata: { button: { text: 'Sí, quiero ver el catálogo', payload: 'si' } } },
+      { conversationId: 'c2', botEnabled: false, scenariosEnabled: true, messageId: 'wamid.2', type: 'button', body: 'Sí', metadata: null },
+    ] };
+    if (sql.includes("direction='outbound'")) return { rows: [{ n: outbound }] };
+    return { rows: [] };
+  };
+  automations.processIncoming = async (...args) => { processed.push(args); outbound += 1; };
+  realtime.publish = async () => {};
+  try {
+    assert.deepEqual(await remarketing.pendingTemplateReplies('org', {}), { hours: 72, pending: 2, ready: 1, botPaused: 1, scenariosPaused: 0 });
+    assert.deepEqual(await remarketing.reprocessTemplateReplies('org', {}), { processed: 1, answered: 1, unanswered: 0 });
+    assert.deepEqual(processed[0].slice(1), ['c1', { id: 'wamid.1', type: 'button', button: { text: 'Sí, quiero ver el catálogo', payload: 'si' } }, { reprocess: true }]);
+  } finally { db.query = original.query; automations.processIncoming = original.process; realtime.publish = original.publish; }
+});

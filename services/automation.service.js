@@ -167,12 +167,16 @@ const aiDetect = async (text, intents) => {
   }
 };
 
-exports.processIncoming = async (organizationId, conversationId, message) => {
+// options.reprocess: se vuelve a atender un mensaje que ya llegó (no repite el aviso de horario).
+exports.processIncoming = async (organizationId, conversationId, message, options = {}) => {
   if (!message?.id) return;
   // Fuera de horario se responde primero con el aviso configurado (cualquier
   // tipo de mensaje del cliente). Si así se configuró, nada más contesta.
-  const afterHours = await businessHours.handleIncoming(organizationId, conversationId, message);
-  if (afterHours.handled) return;
+  const afterHours = options.reprocess ? { handled: false } : await businessHours.handleIncoming(organizationId, conversationId, message);
+  if (afterHours.handled) {
+    if (message.type === 'button' || message.type === 'interactive') log('info', 'Option reply answered only with the after-hours message', { conversationId });
+    return;
+  }
   // Respuestas rápidas de una plantilla (p. ej. «Sí, quiero ver el catálogo») llegan como
   // type «button»: se tratan igual que una opción tocada para que inicien escenarios.
   const optionReply = message.type === 'interactive'
@@ -182,7 +186,10 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
       : null;
   if (message.type !== 'text' && !optionReply) return;
   const [conversation, intents] = await Promise.all([db.query('SELECT auto_reply_enabled FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]), exports.list(organizationId)]);
-  if (!conversation.rows[0]?.auto_reply_enabled) return;
+  if (!conversation.rows[0]?.auto_reply_enabled) {
+    if (optionReply) log('info', 'Option reply ignored: bot paused in this conversation', { conversationId });
+    return;
+  }
   const text = normalize(optionReply ? optionReply.title : message.text?.body); if (!text) return;
   // Respuesta a un mensaje con opciones de un escenario activo: tiene prioridad
   // sobre las reglas generales para no escalar opciones como «500 pares».
@@ -191,7 +198,7 @@ exports.processIncoming = async (organizationId, conversationId, message) => {
   if (optionReply) {
     // Opción tocada fuera de un paso que la espere: puede iniciar un escenario
     // por sus frases; si no, la atiende una persona.
-    const started = await scenarios.processIncoming(organizationId, conversationId, text);
+    const started = await scenarios.processIncoming(organizationId, conversationId, text, { explicit: true });
     if (!started.handled) {
       const moved = await leads.moveToAttention(organizationId, conversationId);
       log('info', 'Interactive option reply escalated to human attention', { conversationId, movedToAttention: moved });
