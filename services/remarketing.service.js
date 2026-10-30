@@ -243,15 +243,17 @@ exports.queueTemplateCampaign = async (organizationId, input) => {
 };
 
 // ---- Respuestas a plantillas que quedaron sin atender ----
-// Quien tocó un botón de una plantilla de remarketing y no recibió ninguna respuesta después
-// (bot pausado, fuera de horario, escenario que no arrancó…). Se pueden volver a procesar.
+// Quien tocó un botón de una plantilla de remarketing y no recibió ningún mensaje nuestro después
+// (bot o escenarios pausados, fuera de horario, escenario que no arrancó…), aunque luego haya
+// escrito algo más. Se pueden volver a procesar.
 const pendingReplies = async (organizationId, hours) => (await db.query(`
   SELECT c.id AS "conversationId", c.auto_reply_enabled AS "botEnabled", c.scenario_enabled AS "scenariosEnabled",
     m.provider_message_id AS "messageId", m.type, m.body, m.message_metadata AS metadata
   FROM conversations c
-  JOIN LATERAL (SELECT * FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) m ON true
-  WHERE c.organization_id = $1 AND m.direction = 'inbound' AND m.type IN ('button', 'interactive')
-    AND m.created_at > now() - make_interval(hours => $2)
+  JOIN LATERAL (SELECT * FROM messages WHERE conversation_id = c.id AND direction = 'inbound' AND type IN ('button', 'interactive')
+    AND created_at > now() - make_interval(hours => $2) ORDER BY created_at DESC LIMIT 1) m ON true
+  WHERE c.organization_id = $1
+    AND NOT EXISTS (SELECT 1 FROM messages o WHERE o.conversation_id = c.id AND o.direction = 'outbound' AND o.created_at > m.created_at)
     AND EXISTS (SELECT 1 FROM messages t WHERE t.conversation_id = c.id AND t.direction = 'outbound' AND t.type = 'template'
       AND t.remarketing_campaign_id IS NOT NULL AND t.created_at > now() - interval '7 days' AND t.created_at < m.created_at)
   ORDER BY m.created_at
@@ -264,26 +266,41 @@ exports.pendingTemplateReplies = async (organizationId, query = {}) => {
   return {
     hours: replyHours(query.hours), pending: rows.length,
     ready: rows.filter((row) => row.botEnabled !== false && row.scenariosEnabled !== false).length,
-    botPaused: rows.filter((row) => row.botEnabled === false).length,
+    // Grupos sin traslape: solo bot pausado, solo escenarios pausados, ambos pausados.
+    botPaused: rows.filter((row) => row.botEnabled === false && row.scenariosEnabled !== false).length,
     scenariosPaused: rows.filter((row) => row.botEnabled !== false && row.scenariosEnabled === false).length,
+    bothPaused: rows.filter((row) => row.botEnabled === false && row.scenariosEnabled === false).length,
   };
 };
 
 exports.reprocessTemplateReplies = async (organizationId, input = {}) => {
   const automations = require('./automation.service');
-  const rows = (await pendingReplies(organizationId, replyHours(input.hours))).filter((row) => row.botEnabled !== false && row.scenariosEnabled !== false);
+  const pending = await pendingReplies(organizationId, replyHours(input.hours));
+  // Opcional: enciende escenarios y/o bot solo en esos chats para que el catálogo pueda salir.
+  const turnOn = async (column, flag, key) => {
+    const ids = pending.filter((row) => row[key] === false).map((row) => row.conversationId);
+    if (!flag || !ids.length) return 0;
+    await db.query(`UPDATE conversations SET ${column} = true WHERE organization_id = $1 AND id = ANY($2::uuid[])`, [organizationId, ids]);
+    pending.forEach((row) => { if (ids.includes(row.conversationId)) row[key] = true; });
+    return ids.length;
+  };
+  const scenariosEnabled = await turnOn('scenario_enabled', input.enableScenarios === true, 'scenariosEnabled');
+  const botEnabled = await turnOn('auto_reply_enabled', input.enableBot === true, 'botEnabled');
+  const rows = pending.filter((row) => row.botEnabled !== false && row.scenariosEnabled !== false);
   let answered = 0;
   for (const row of rows) {
     const button = row.metadata?.button || {};
     const interactive = row.metadata?.interactive || {};
+    // Id propio: el registro de automatizaciones no debe tomarlo como un mensaje ya procesado.
+    const id = `reprocess:${row.messageId || row.conversationId}:${Date.now()}`;
     const message = row.type === 'button'
-      ? { id: row.messageId || `reprocess:${row.conversationId}`, type: 'button', button: { text: button.text || row.body, payload: button.payload } }
-      : { id: row.messageId || `reprocess:${row.conversationId}`, type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: interactive.id, title: interactive.title || row.body } } };
+      ? { id, type: 'button', button: { text: button.text || row.body, payload: button.payload } }
+      : { id, type: 'interactive', interactive: { type: 'button_reply', button_reply: { id: interactive.id, title: interactive.title || row.body } } };
     const before = await db.query("SELECT count(*)::int AS n FROM messages WHERE conversation_id=$1 AND direction='outbound'", [row.conversationId]);
     await automations.processIncoming(organizationId, row.conversationId, message, { reprocess: true });
     const after = await db.query("SELECT count(*)::int AS n FROM messages WHERE conversation_id=$1 AND direction='outbound'", [row.conversationId]);
     if (after.rows[0].n > before.rows[0].n) answered += 1;
   }
   if (rows.length) await realtime.publish(organizationId, 'remarketing.queued');
-  return { processed: rows.length, answered, unanswered: rows.length - answered };
+  return { processed: rows.length, answered, unanswered: rows.length - answered, scenariosEnabled, botEnabled, skipped: pending.length - rows.length };
 };
