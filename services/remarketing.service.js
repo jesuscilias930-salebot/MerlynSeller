@@ -5,6 +5,7 @@ const realtime = require('../lib/realtime');
 
 const campaignSchema = z.object({
   columnId: z.string().uuid(),
+  enableScenarios: z.boolean().optional(),
   body: z.string().trim().min(1).max(4096).optional(),
   mediaId: z.string().trim().min(1).max(256).optional(),
   filename: z.string().trim().min(1).max(240).optional(),
@@ -24,6 +25,14 @@ const presetSchema = z.object({
   if (value.mediaId && value.body && value.body.length > 1024) context.addIssue({ code: 'custom', message: 'An image caption cannot exceed 1024 characters' });
   if (value.filename && !value.mediaId) context.addIssue({ code: 'custom', message: 'filename requires mediaId' });
 });
+
+// «Encender escenarios para todos»: prende los escenarios solo en los chats de la columna que
+// los tienen pausados (p. ej. los que llegaron por un pedido de la tienda). Devuelve cuántos cambió.
+const enableColumnScenarios = async (client, organizationId, columnId) => (await client.query(
+  'UPDATE conversations SET scenario_enabled = true WHERE organization_id = $1 AND lead_column_id = $2 AND scenario_enabled = false RETURNING id',
+  [organizationId, columnId],
+)).rowCount;
+exports.enableColumnScenarios = enableColumnScenarios;
 
 const validate = (value) => {
   const parsed = campaignSchema.safeParse(value);
@@ -86,6 +95,8 @@ exports.queueCampaign = async (organizationId, input) => {
       error.status = 404;
       throw error;
     }
+    // Solo si se marcó la casilla se revisan y encienden los escenarios de la columna.
+    const scenariosEnabled = data.enableScenarios === true ? await enableColumnScenarios(client, organizationId, data.columnId) : 0;
 
     const total = await client.query(
       'SELECT count(*)::int AS count FROM conversations WHERE organization_id = $1 AND lead_column_id = $2',
@@ -133,6 +144,7 @@ exports.queueCampaign = async (organizationId, input) => {
       messageIds: inserted,
       queued: inserted.length,
       skipped: total.rows[0].count - inserted.length,
+      scenariosEnabled,
     };
   });
 
@@ -142,7 +154,7 @@ exports.queueCampaign = async (organizationId, input) => {
     { jobId: messageId },
   )));
   await realtime.publish(organizationId, 'remarketing.queued');
-  return { campaignId: result.campaignId, queued: result.queued, skipped: result.skipped };
+  return { campaignId: result.campaignId, queued: result.queued, skipped: result.skipped, scenariosEnabled: result.scenariosEnabled };
 };
 
 // ---- Envío masivo con plantilla oficial ----
@@ -153,12 +165,13 @@ const templateCampaignSchema = z.object({
   columnId: z.string().uuid('Elige la columna'),
   templateId: z.string().uuid('Elige la plantilla'),
   manualValues: z.record(z.string(), z.string().max(1024)).default({}),
+  enableScenarios: z.boolean().default(false),
 });
 const MAX_TEMPLATE_RECIPIENTS = () => Math.max(1, Number(process.env.REMARKETING_TEMPLATE_MAX || 1000));
 const fail = (status, message) => { const error = new Error(message); error.status = status; throw error; };
 
 const templateAudience = async (client, organizationId, columnId) => (await client.query(`
-  SELECT c.id, ct.name, ct.phone_number, COALESCE(ct.channel, 'whatsapp') AS channel,
+  SELECT c.id, ct.name, ct.phone_number, COALESCE(ct.channel, 'whatsapp') AS channel, c.scenario_enabled = false AS "scenariosPaused",
     EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'outbound' AND m.type = 'template'
       AND m.remarketing_campaign_id IS NOT NULL AND m.created_at > now() - interval '24 hours') AS recent
   FROM conversations c JOIN contacts ct ON ct.id = c.contact_id
@@ -171,7 +184,7 @@ const audienceSummary = (rows) => {
   const whatsapp = rows.filter((row) => row.channel === 'whatsapp');
   const fresh = whatsapp.filter((row) => !row.recent);
   const max = MAX_TEMPLATE_RECIPIENTS();
-  return { total: rows.length, eligible: Math.min(fresh.length, max), otherChannel: rows.length - whatsapp.length, recent: whatsapp.length - fresh.length, overLimit: Math.max(0, fresh.length - max), max, recipients: fresh.slice(0, max) };
+  return { total: rows.length, scenariosPaused: rows.filter((row) => row.scenariosPaused).length, eligible: Math.min(fresh.length, max), otherChannel: rows.length - whatsapp.length, recent: whatsapp.length - fresh.length, overLimit: Math.max(0, fresh.length - max), max, recipients: fresh.slice(0, max) };
 };
 exports.audienceSummary = audienceSummary;
 
@@ -184,11 +197,13 @@ exports.previewTemplateCampaign = async (organizationId, columnId) => {
 exports.queueTemplateCampaign = async (organizationId, input) => {
   const parsed = templateCampaignSchema.safeParse(input);
   if (!parsed.success) fail(400, parsed.error.issues[0].message);
-  const { columnId, templateId, manualValues } = parsed.data;
+  const { columnId, templateId, manualValues, enableScenarios } = parsed.data;
   const templates = require('./whatsapp-template.service');
   const result = await db.transaction(async (client) => {
     const column = await client.query('SELECT id FROM lead_columns WHERE id = $1 AND organization_id = $2', [columnId, organizationId]);
     if (!column.rows[0]) fail(404, 'La columna no existe');
+    // Solo si se marcó la casilla se revisan y encienden los escenarios de la columna.
+    const scenariosEnabled = enableScenarios === true ? await enableColumnScenarios(client, organizationId, columnId) : 0;
     const templateRow = (await client.query("SELECT * FROM whatsapp_templates WHERE id=$1 AND organization_id=$2 AND status='APPROVED'", [templateId, organizationId])).rows[0];
     if (!templateRow) fail(404, 'La plantilla aprobada no fue encontrada. Sincroniza tus plantillas.');
     if ((templateRow.components || []).some((component) => String(component.type).toUpperCase() === 'HEADER' && ['IMAGE', 'VIDEO', 'DOCUMENT'].includes(String(component.format).toUpperCase())))
@@ -220,11 +235,11 @@ exports.queueTemplateCampaign = async (organizationId, input) => {
       `, [organizationId, item.conversationId, item.body, campaign.rows[0].id]);
       messageIds.push(message.rows[0].id);
     }
-    return { campaignId: campaign.rows[0].id, messageIds, skipped: { otherChannel: summary.otherChannel, recent: summary.recent, overLimit: summary.overLimit, missingData }, firstProblem };
+    return { campaignId: campaign.rows[0].id, messageIds, skipped: { otherChannel: summary.otherChannel, recent: summary.recent, overLimit: summary.overLimit, missingData }, firstProblem, scenariosEnabled };
   });
   await Promise.all(result.messageIds.map((messageId) => require('../lib/queue').outboundQueue().add('send-remarketing-template', { messageId }, { jobId: messageId })));
   await realtime.publish(organizationId, 'remarketing.queued');
-  return { campaignId: result.campaignId, queued: result.messageIds.length, skipped: result.skipped, ...(result.skipped.missingData ? { warning: result.firstProblem } : {}) };
+  return { campaignId: result.campaignId, queued: result.messageIds.length, skipped: result.skipped, scenariosEnabled: result.scenariosEnabled, ...(result.skipped.missingData ? { warning: result.firstProblem } : {}) };
 };
 
 // ---- Respuestas a plantillas que quedaron sin atender ----

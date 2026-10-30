@@ -17,7 +17,7 @@ test('resume a quién se envía y por qué se omite al resto', () => {
   const saved = process.env.REMARKETING_TEMPLATE_MAX; process.env.REMARKETING_TEMPLATE_MAX = '1';
   try {
     const summary = remarketing.audienceSummary(rows);
-    assert.deepEqual({ ...summary, recipients: summary.recipients.map((row) => row.id) }, { total: 4, eligible: 1, otherChannel: 1, recent: 1, overLimit: 1, max: 1, recipients: ['a'] });
+    assert.deepEqual({ ...summary, recipients: summary.recipients.map((row) => row.id) }, { total: 4, scenariosPaused: 0, eligible: 1, otherChannel: 1, recent: 1, overLimit: 1, max: 1, recipients: ['a'] });
   } finally { if (saved === undefined) delete process.env.REMARKETING_TEMPLATE_MAX; else process.env.REMARKETING_TEMPLATE_MAX = saved; }
 });
 
@@ -43,6 +43,8 @@ test('encola la plantilla con el nombre de cada lead y omite a quien no tiene el
     const message = calls.find((call) => call.sql.includes('INSERT INTO messages'));
     assert.deepEqual(JSON.parse(message.args[2]).components, [{ type: 'body', parameters: [{ type: 'text', text: 'Ana' }] }]);
     assert.equal(jobs.length, 1);
+    assert.equal(result.scenariosEnabled, 0);
+    assert.ok(!calls.some((call) => call.sql.includes('SET scenario_enabled')), 'sin la casilla no toca los escenarios');
   } finally { db.transaction = original.transaction; queue.outboundQueue = original.queue; realtime.publish = original.publish; }
 });
 
@@ -65,4 +67,29 @@ test('vuelve a atender las respuestas a plantillas que quedaron sin respuesta', 
     assert.deepEqual(await remarketing.reprocessTemplateReplies('org', {}), { processed: 1, answered: 1, unanswered: 0 });
     assert.deepEqual(processed[0].slice(1), ['c1', { id: 'wamid.1', type: 'button', button: { text: 'Sí, quiero ver el catálogo', payload: 'si' } }, { reprocess: true }]);
   } finally { db.query = original.query; automations.processIncoming = original.process; realtime.publish = original.publish; }
+});
+
+test('con «Encender escenarios para todos» prende solo los chats de la columna que los tienen pausados', async () => {
+  const calls = [];
+  const client = { query: async (sql, args) => {
+    calls.push({ sql, args });
+    if (sql.startsWith('SELECT id FROM lead_columns')) return { rows: [{ id: columnId }] };
+    if (sql.includes('SET scenario_enabled = true')) return { rows: [{ id: 'c2' }, { id: 'c3' }], rowCount: 2 };
+    if (sql.includes('FROM whatsapp_templates')) return { rows: [templateRow] };
+    if (sql.includes('FROM conversations c JOIN contacts')) return { rows: [{ id: 'c1', name: 'Ana', phone_number: '521', channel: 'whatsapp', recent: false }] };
+    if (sql.includes('INSERT INTO remarketing_campaigns')) return { rows: [{ id: 'camp' }] };
+    if (sql.includes('INSERT INTO messages')) return { rows: [{ id: 'm1' }] };
+    return { rows: [] };
+  } };
+  const original = { transaction: db.transaction, queue: queue.outboundQueue, publish: realtime.publish };
+  db.transaction = (fn) => fn(client);
+  queue.outboundQueue = () => ({ add: async () => {} });
+  realtime.publish = async () => {};
+  try {
+    const result = await remarketing.queueTemplateCampaign('org', { columnId, templateId, enableScenarios: true });
+    assert.equal(result.scenariosEnabled, 2);
+    const update = calls.find((call) => call.sql.includes('SET scenario_enabled = true'));
+    assert.match(update.sql, /lead_column_id = \$2 AND scenario_enabled = false/);
+    assert.deepEqual(update.args, ['org', columnId]);
+  } finally { db.transaction = original.transaction; queue.outboundQueue = original.queue; realtime.publish = original.publish; }
 });
