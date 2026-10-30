@@ -765,6 +765,14 @@ const run = async (
   return complete(organizationId, conversationId);
 };
 
+// Largo (en palabras) de la frase de inicio que aparece completa en el mensaje; 99 si es idéntica.
+const specificity = (text, examples) => Math.max(0, ...(examples || []).map((example) => {
+  const phrase = normalize(example);
+  if (!phrase) return 0;
+  if (phrase === text) return 99;
+  return ` ${text} `.includes(` ${phrase} `) ? phrase.split(" ").length : 0;
+}));
+
 // options.explicit: el cliente tocó un botón (p. ej. la respuesta rápida de una plantilla).
 // Es una intención clara, así que puede reemplazar el escenario en curso aunque no admita interrupciones.
 exports.processIncoming = async (organizationId, conversationId, incoming, options = {}) => {
@@ -777,7 +785,9 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
   ]);
   if (conversation.rows[0]?.scenario_enabled === false) return { handled: false, requiresHuman: false };
   const active = scenarios.filter((scenario) => scenario.isActive);
-  const rankedStarts = active.map((scenario) => ({ scenario, value: score(text, scenario.triggerExamples) })).sort((a, b) => b.value - a.value || a.scenario.position - b.scenario.position || b.scenario.priority - a.scenario.priority);
+  // Si dos escenarios coinciden igual (p. ej. uno con la frase «si» y otro con «Sí, quiero ver el
+  // catálogo»), gana la frase más específica y no el que está más arriba en la lista.
+  const rankedStarts = active.map((scenario) => ({ scenario, value: score(text, scenario.triggerExamples), specific: specificity(text, scenario.triggerExamples) })).sort((a, b) => b.value - a.value || b.specific - a.specific || a.scenario.position - b.scenario.position || b.scenario.priority - a.scenario.priority);
   let newStart = rankedStarts[0]?.value >= 0.72 ? rankedStarts[0].scenario : null;
   if (!newStart) newStart = await aiMatchScenario(text, active);
 
@@ -836,6 +846,14 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
     if (match) {
       await run(organizationId, conversationId, scenario, match.nextStepId);
       log("info", "Conversation scenario advanced", { scenario: scenario.key, step: step.id, branch: match.id });
+      return { handled: true, requiresHuman: false };
+    }
+    // El botón de una plantilla que inicia este mismo escenario (el cliente ya lo había recorrido)
+    // lo vuelve a empezar en lugar de tratarse como respuesta al paso donde se quedó.
+    if (options.explicit && newStart && newStart.key === scenario.key) {
+      await complete(organizationId, conversationId);
+      await run(organizationId, conversationId, newStart, newStart.steps[0].id);
+      log("info", "Conversation scenario restarted by option reply", { scenario: scenario.key, step: step.id });
       return { handled: true, requiresHuman: false };
     }
     const decision = await classifyUnmatchedReply(text, scenario, { ...step, branches });

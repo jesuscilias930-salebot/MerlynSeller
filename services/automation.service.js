@@ -195,28 +195,26 @@ exports.processIncoming = async (organizationId, conversationId, message, option
   // sobre las reglas generales para no escalar opciones como «500 pares».
   const optionResult = await scenarios.processOptionReply(organizationId, conversationId, text, optionReply?.id);
   if (optionResult.handled) return;
-  if (optionReply) {
-    // Opción tocada fuera de un paso que la espere: puede iniciar un escenario
-    // por sus frases; si no, la atiende una persona.
-    const started = await scenarios.processIncoming(organizationId, conversationId, text, { explicit: true });
-    if (!started.handled) {
-      const moved = await leads.moveToAttention(organizationId, conversationId);
-      log('info', 'Interactive option reply escalated to human attention', { conversationId, movedToAttention: moved });
-    }
-    return;
-  }
+  // Opción tocada fuera de un paso que la espere (p. ej. el botón de una plantilla): primero puede
+  // iniciar un escenario por sus frases; si ninguno coincide, la evalúan las automatizaciones
+  // (como «Enviar catálogo») igual que un texto, y si tampoco, la atiende una persona.
+  let scenarioResult = optionReply ? await scenarios.processIncoming(organizationId, conversationId, text, { explicit: true }) : null;
+  if (scenarioResult?.handled) return;
+  if (optionReply) log('info', 'Option reply did not start a scenario', { conversationId, reply: text });
   // A configured scenario always has the first chance to route the message.
   // This permits a scenario such as "Envíos nacionales" to use "hace envíos"
   // as its start trigger, including when it replaces another active scenario.
   const shippingQuestion = isShippingQuestion(text);
   const active = intents.filter((intent) => intent.isActive);
-  if (isSpecificQuoteRequest(text)) {
+  if (!optionReply && isSpecificQuoteRequest(text)) {
     const moved = await leads.moveToAttention(organizationId, conversationId);
     log('info', 'Specific quote request escalated to human attention', { conversationId, movedToAttention: moved });
     return;
   }
-  const scenarioResult = await scenarios.processIncoming(organizationId, conversationId, text);
-  if (scenarioResult.handled) return;
+  if (!scenarioResult) {
+    scenarioResult = await scenarios.processIncoming(organizationId, conversationId, text);
+    if (scenarioResult.handled) return;
+  }
   // No scenario started or handled this message, so preserve the normal
   // shipping-answer behavior for organizations that use an automation instead
   // of a full scenario.
@@ -270,7 +268,8 @@ exports.processIncoming = async (organizationId, conversationId, message, option
   const { intent } = selected[0];
   if (intent.action === 'send_catalog') {
     const alreadySent = await hasReceivedCatalog(organizationId, conversationId);
-    if (alreadySent && !isExplicitCatalogResend(text)) {
+    // Tocar «Sí, quiero ver el catálogo» de una plantilla es pedirlo de nuevo: se reenvía.
+    if (alreadySent && !optionReply && !isExplicitCatalogResend(text)) {
       await conversations.queueText(organizationId, conversationId, { body: 'El catálogo ya está en esta conversación. Si no puedes abrirlo, dime y con gusto te lo reenvío.' });
     } else {
       const catalog = await db.query('SELECT media_id, filename, caption FROM catalog_documents WHERE organization_id=$1', [organizationId]);

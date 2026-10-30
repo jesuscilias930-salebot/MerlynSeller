@@ -156,7 +156,7 @@ test('la respuesta rápida de una plantilla inicia el escenario cuyas frases coi
   const leads = require('../services/lead.service');
   const original = { query: db.query, option: scenarios.processOptionReply, incoming: scenarios.processIncoming, attention: leads.moveToAttention };
   const started = []; let escalated = false;
-  db.query = async (sql) => sql.includes('auto_reply_enabled') ? { rows: [{ auto_reply_enabled: true }] } : { rows: [] };
+  db.query = async (sql) => sql.includes('auto_reply_enabled') ? { rows: [{ auto_reply_enabled: true }] } : sql.includes('INSERT INTO automation_events') ? { rows: [{ id: 'e1' }] } : { rows: [] };
   scenarios.processOptionReply = async () => ({ handled: false });
   scenarios.processIncoming = async (...args) => { started.push(args); return { handled: args[2].includes('catalogo') }; };
   leads.moveToAttention = async () => { escalated = true; return true; };
@@ -190,4 +190,65 @@ test('un escenario viejo que ya no espera respuesta no bloquea el botón de la p
     assert.ok(calls.some((sql) => sql.includes('SET completed_at=now()')), 'cierra el escenario viejo');
     assert.deepEqual(sent, ['Aquí va']);
   } finally { db.query = original.query; conversations.queueText = original.text; scenarios.list = original.list; }
+});
+
+const scenarioRow = (key, position, triggerExamples, body) => ({
+  ...scenarios.parseDefinition({ name: key, triggerExamples, steps: [{ id: 'hola', type: 'send_text', label: 'Saludo', body, nextStepId: 'fin' }, { id: 'fin', type: 'end', label: 'Fin' }] }),
+  id: key, key, isActive: true, canInterrupt: false, position, priority: 0,
+});
+const withScenarioDb = async (rows, state, fn) => {
+  const original = { query: db.query, text: conversations.queueText, list: scenarios.list };
+  const sent = [];
+  db.query = async (sql) => {
+    if (sql.includes('auto_reply_enabled')) return { rows: [{ auto_reply_enabled: true }] };
+    if (sql.includes('scenario_enabled')) return { rows: [{ scenario_enabled: true }] };
+    if (sql.includes('FROM conversation_scenario_states')) return { rows: state ? [state] : [] };
+    return { rows: [] };
+  };
+  scenarios.list = async () => rows;
+  conversations.queueText = async (...args) => { sent.push(args[2].body); return {}; };
+  try { await fn(sent); } finally { db.query = original.query; conversations.queueText = original.text; scenarios.list = original.list; }
+};
+
+test('gana la frase más específica aunque otro escenario esté más arriba', async () => {
+  const rows = [scenarioRow('confirmar', 0, ['si', 'claro'], 'Confirmado'), scenarioRow('catalogo', 1, ['Sí, quiero ver el catálogo'], 'Aquí va el catálogo')];
+  await withScenarioDb(rows, null, async (sent) => {
+    await require('../services/automation.service').processIncoming('org', 'conv', { id: 'wamid.20', type: 'button', button: { text: 'Sí, quiero ver el catálogo' } });
+    assert.deepEqual(sent, ['Aquí va el catálogo']);
+  });
+});
+
+test('el botón de la plantilla reinicia el mismo escenario si el cliente se quedó esperando en él', async () => {
+  const flow = scenarios.parseDefinition({ name: 'Catálogo', triggerExamples: ['Sí, quiero ver el catálogo'], steps: [
+    { id: 'hola', type: 'send_text', label: 'Saludo', body: 'Aquí va el catálogo', nextStepId: 'espera' },
+    { id: 'espera', type: 'wait_reply', label: 'Esperar', branches: [{ id: 'gracias', name: 'Gracias', examples: ['gracias'], nextStepId: 'fin' }] },
+    { id: 'fin', type: 'end', label: 'Fin' },
+  ] });
+  const rows = [{ ...flow, id: 'c', key: 'catalogo', isActive: true, canInterrupt: false, position: 0, priority: 0 }];
+  await withScenarioDb(rows, { scenario_key: 'catalogo', step: 'espera' }, async (sent) => {
+    await require('../services/automation.service').processIncoming('org', 'conv', { id: 'wamid.21', type: 'button', button: { text: 'Sí, quiero ver el catálogo' } });
+    assert.deepEqual(sent, ['Aquí va el catálogo']);
+  });
+});
+
+test('sin escenario, el botón de la plantilla usa la automatización de catálogo y lo reenvía', async () => {
+  const automations = require('../services/automation.service');
+  const original = { query: db.query, doc: conversations.queueDocument, text: conversations.queueText, list: scenarios.list };
+  const docs = []; const texts = [];
+  db.query = async (sql) => {
+    if (sql.includes('auto_reply_enabled')) return { rows: [{ auto_reply_enabled: true }] };
+    if (sql.includes('FROM automation_intents') || sql.includes('FROM automations')) return { rows: [{ id: 'i1', key: 'catalogo', name: 'Catálogo', action: 'send_catalog', examples: ['quiero ver el catalogo'], isActive: true, priority: 0 }] };
+    if (sql.includes('INSERT INTO automation_events')) return { rows: [{ id: 'e1' }] };
+    if (sql.includes('FROM catalog_documents')) return { rows: [{ media_id: 'media1', filename: 'catalogo.pdf' }] };
+    if (sql.includes('document') || sql.includes('catalog')) return { rows: [{ exists: true, sent: true, count: 1 }] };
+    return { rows: [] };
+  };
+  scenarios.list = async () => [];
+  conversations.queueDocument = async (...args) => { docs.push(args[2].mediaId); return {}; };
+  conversations.queueText = async (...args) => { texts.push(args[2].body); return {}; };
+  try {
+    await automations.processIncoming('org', 'conv', { id: 'wamid.22', type: 'button', button: { text: 'Sí, quiero ver el catálogo' } });
+    assert.deepEqual(docs, ['media1']);
+    assert.deepEqual(texts, []);
+  } finally { db.query = original.query; conversations.queueDocument = original.doc; conversations.queueText = original.text; scenarios.list = original.list; }
 });
