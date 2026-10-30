@@ -12,7 +12,7 @@ const MAX_MESSAGES_PER_DRAIN = 100;
 const outboundRedis = connection();
 
 const pendingMessage = async (conversationId) => (await db.query(`
-  SELECT m.id, m.type, m.body, m.media_id, m.filename, m.organization_id, m.conversation_id,
+  SELECT m.id, m.type, m.body, m.media_id, m.filename, m.organization_id, m.conversation_id, m.remarketing_campaign_id,
     m.outbound_sequence, c.phone_number, c.channel, c.external_id,
     replied.provider_message_id AS reply_to_provider_message_id,
     (SELECT max(created_at) FROM messages i WHERE i.conversation_id = m.conversation_id AND i.direction = 'inbound') AS last_inbound_at,
@@ -106,6 +106,11 @@ const drainConversation = async (conversationId, jobId) => {
         await db.query("UPDATE messages SET status = 'sent', provider_message_id = $2, updated_at = now() WHERE id = $1", [message.id, sent.messages[0]?.id || null]);
         await realtime.publish(message.organization_id, 'message.sent', message.conversation_id);
         if (message.type === 'template') await notifyReminder(message.id, 'sent');
+        // Remarketing con columna «al enviar» configurada: mueve el lead (nunca frena el envío).
+        if (message.remarketing_campaign_id) {
+          try { await require('./services/remarketing-move.service').afterSent(message.id); }
+          catch (error) { console.error(JSON.stringify({ level: 'error', message: 'Remarketing after-send move failed', messageId: message.id, errorMessage: error.message })); }
+        }
         console.log(JSON.stringify({ level: 'info', message: 'Outbound message sent in FIFO order', conversationId, messageId: message.id, sequence: message.outbound_sequence }));
       } catch (error) {
         const failure = error.meta?.details || error.meta?.message || error.message;

@@ -6,6 +6,8 @@ const realtime = require('../lib/realtime');
 const campaignSchema = z.object({
   columnId: z.string().uuid(),
   enableScenarios: z.boolean().optional(),
+  // Mensaje guardado usado (si lo hay): define a qué columnas se mueven los leads.
+  presetId: z.string().uuid().optional(),
   body: z.string().trim().min(1).max(4096).optional(),
   mediaId: z.string().trim().min(1).max(256).optional(),
   filename: z.string().trim().min(1).max(240).optional(),
@@ -102,6 +104,8 @@ exports.queueCampaign = async (organizationId, input) => {
       'SELECT count(*)::int AS count FROM conversations WHERE organization_id = $1 AND lead_column_id = $2',
       [organizationId, data.columnId],
     );
+    const presetId = data.presetId && (await client.query('SELECT id FROM remarketing_presets WHERE id = $1 AND organization_id = $2', [data.presetId, organizationId])).rows[0]?.id || null;
+    const moves = await require('./remarketing-move.service').forCampaign(client, organizationId, { presetId });
     const eligible = await client.query(`
       SELECT c.id
       FROM conversations c
@@ -117,10 +121,10 @@ exports.queueCampaign = async (organizationId, input) => {
     `, [organizationId, data.columnId]);
 
     const campaign = await client.query(`
-      INSERT INTO remarketing_campaigns (organization_id, lead_column_id, lead_column_name, body, image_media_id, image_filename, recipient_count)
-      VALUES ($1, $2, (SELECT name FROM lead_columns WHERE id = $2 AND organization_id = $1), $3, $4, $5, $6)
+      INSERT INTO remarketing_campaigns (organization_id, lead_column_id, lead_column_name, body, image_media_id, image_filename, recipient_count, preset_id, after_send_column_id, on_reply_column_id)
+      VALUES ($1, $2, (SELECT name FROM lead_columns WHERE id = $2 AND organization_id = $1), $3, $4, $5, $6, $7, $8, $9)
       RETURNING id
-    `, [organizationId, data.columnId, data.body || null, data.mediaId || null, data.filename || null, eligible.rowCount]);
+    `, [organizationId, data.columnId, data.body || null, data.mediaId || null, data.filename || null, eligible.rowCount, presetId, moves.afterSendColumnId, moves.onReplyColumnId]);
 
     const inserted = [];
     for (const conversation of eligible.rows) {
@@ -223,10 +227,11 @@ exports.queueTemplateCampaign = async (organizationId, input) => {
       }
     }
     if (!prepared.length) fail(400, firstProblem || 'Ningún lead tiene los datos que pide la plantilla.');
+    const moves = await require('./remarketing-move.service').forCampaign(client, organizationId, { templateId: templateRow.id });
     const campaign = await client.query(`
-      INSERT INTO remarketing_campaigns (organization_id, lead_column_id, lead_column_name, body, recipient_count, template_id, template_name)
-      VALUES ($1, $2, (SELECT name FROM lead_columns WHERE id = $2 AND organization_id = $1), $3, $4, $5, $6) RETURNING id
-    `, [organizationId, columnId, `📋 Plantilla: ${templateRow.name}`, prepared.length, templateRow.id, templateRow.name]);
+      INSERT INTO remarketing_campaigns (organization_id, lead_column_id, lead_column_name, body, recipient_count, template_id, template_name, after_send_column_id, on_reply_column_id)
+      VALUES ($1, $2, (SELECT name FROM lead_columns WHERE id = $2 AND organization_id = $1), $3, $4, $5, $6, $7, $8) RETURNING id
+    `, [organizationId, columnId, `📋 Plantilla: ${templateRow.name}`, prepared.length, templateRow.id, templateRow.name, moves.afterSendColumnId, moves.onReplyColumnId]);
     const messageIds = [];
     for (const item of prepared) {
       const message = await client.query(`

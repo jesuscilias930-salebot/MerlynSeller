@@ -79,3 +79,13 @@ exports.removePreset = async (req, res, next) => {
     return handle(error, res, next);
   }
 };
+
+exports.listMoveRules = async (req, res, next) => {
+  try { return res.json(await require('../services/remarketing-move.service').list(req.auth.organizationId)); }
+  catch (error) { return handle(error, res, next); }
+};
+
+exports.saveMoveRule = async (req, res, next) => {
+  try { return res.json(await require('../services/remarketing-move.service').save(req.auth.organizationId, req.body)); }
+  catch (error) { return handle(error, res, next); }
+};

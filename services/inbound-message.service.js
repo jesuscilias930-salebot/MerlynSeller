@@ -3,6 +3,7 @@ const realtime = require('../lib/realtime');
 const conversations = require('./conversation.service');
 const columnRules = require('./column-rule.service');
 const leads = require('./lead.service');
+const remarketingMoves = require('./remarketing-move.service');
 const automations = require('./automation.service');
 const metaConversions = require('./meta-conversions.service');
 const metaMessaging = require('./meta-messaging.service');
@@ -289,8 +290,12 @@ exports.process = async (payload) => {
           // Keep commercial engagement visible even if the automation also
           // escalates an unmatched message to the human-attention column.
           if (stored.isMarketingReply) {
-            const movedToHot = await leads.moveToRemarketingHot(account.rows[0].organization_id, stored.conversationId);
-            console.log(JSON.stringify({ level: 'info', message: 'Marketing response evaluated for R-HOT', conversationId: stored.conversationId, movedToHot }));
+            // Columna «si responden» configurada para ese remarketing; si no hay, R-HOT como antes.
+            let configured = { configured: false, moved: false };
+            try { configured = await remarketingMoves.onReply(account.rows[0].organization_id, stored.conversationId, message.context?.id); }
+            catch (error) { console.error(JSON.stringify({ level: 'error', message: 'Remarketing reply move failed', conversationId: stored.conversationId, errorMessage: error.message })); }
+            const movedToHot = configured.configured ? false : await leads.moveToRemarketingHot(account.rows[0].organization_id, stored.conversationId);
+            console.log(JSON.stringify({ level: 'info', message: 'Marketing response evaluated', conversationId: stored.conversationId, configuredColumn: configured.configured, movedByConfig: configured.moved, movedToHot }));
           }
         }
       }

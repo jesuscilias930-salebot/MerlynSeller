@@ -185,6 +185,13 @@ const remapColumns = async (client, organizationId, map) => {
     );
     movedLeads += moved.rowCount || 0;
     await client.query('UPDATE column_rules SET column_id = $1, updated_at = now() WHERE organization_id = $2 AND column_id = $3', [to, organizationId, from]);
+    await client.query(
+      `UPDATE remarketing_move_rules SET
+         after_send_column_id = CASE WHEN after_send_column_id = $3 THEN $1 ELSE after_send_column_id END,
+         on_reply_column_id = CASE WHEN on_reply_column_id = $3 THEN $1 ELSE on_reply_column_id END, updated_at = now()
+       WHERE organization_id = $2 AND $3 IN (after_send_column_id, on_reply_column_id)`,
+      [to, organizationId, from],
+    );
   }
   // Los escenarios que movían leads a esas columnas ahora los mueven a la de reemplazo.
   const scenarios = await client.query(

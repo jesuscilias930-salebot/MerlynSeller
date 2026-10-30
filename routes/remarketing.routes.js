@@ -13,5 +13,7 @@ router.get('/template-campaigns/preview', controller.previewTemplate);
 router.post('/template-campaigns', controller.sendTemplate);
 router.get('/template-replies/pending', controller.pendingTemplateReplies);
 router.post('/template-replies/reprocess', controller.reprocessTemplateReplies);
+router.get('/move-rules', controller.listMoveRules);
+router.put('/move-rules', controller.saveMoveRule);
 
 module.exports = router;
