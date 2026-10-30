@@ -14,7 +14,7 @@ const withDb = async (handler, fn) => {
   try { await fn(calls); } finally { Object.assign(db, { query: original.query, transaction: original.transaction }); realtime.publish = original.publish; }
 };
 
-test('crear un dashboard copia las columnas del principal', async () => {
+test('crear un dashboard le pone solo la columna «Primer contacto»', async () => {
   await withDb((sql) => {
     if (sql.includes('INSERT INTO lead_boards')) return { rows: [{ id: boardId, name: 'Calcetas · Orizaba', product: 'Calcetas', zone: 'Orizaba', isDefault: false }] };
     if (sql.includes('INSERT INTO lead_columns')) return { rows: [{ id: 'a' }, { id: 'b' }], rowCount: 2 };
@@ -24,7 +24,10 @@ test('crear un dashboard copia las columnas del principal', async () => {
     assert.equal(board.id, boardId);
     const insert = calls.find((call) => call.sql.includes('INSERT INTO lead_boards'));
     assert.deepEqual(insert.args, ['org', 'Calcetas · Orizaba', 'Calcetas', 'Orizaba']);
-    assert.match(calls.find((call) => call.sql.includes('INSERT INTO lead_columns')).sql, /board\.is_default/);
+    const columns = calls.filter((call) => call.sql.includes('INSERT INTO lead_columns'));
+    assert.equal(columns.length, 1);
+    assert.match(columns[0].sql, /'Primer contacto', 0/);
+    assert.deepEqual(columns[0].args, ['org', boardId]);
     await assert.rejects(boards.create('org', { name: '  ' }), { status: 400 });
   });
 });

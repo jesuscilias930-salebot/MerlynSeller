@@ -57,7 +57,7 @@ exports.list = async (organizationId, userId) => {
   });
 };
 
-/** Crea un dashboard copiando las columnas del principal (incluidas Requiere atención y R-HOT). */
+/** Crea un dashboard con una sola columna: «Primer contacto». */
 exports.create = async (organizationId, input) => {
   const data = parse(boardSchema, input);
   const board = await db.transaction(async (client) => {
@@ -67,16 +67,7 @@ exports.create = async (organizationId, input) => {
        RETURNING id, name, product, zone, position, is_default AS "isDefault"`,
       [organizationId, data.name, data.product, data.zone],
     ).catch(duplicate);
-    const id = created.rows[0].id;
-    const copied = await client.query(
-      `INSERT INTO lead_columns (organization_id, board_id, name, position)
-       SELECT $1, $2, column_row.name, column_row.position
-       FROM lead_columns column_row JOIN lead_boards board ON board.id = column_row.board_id
-       WHERE board.organization_id = $1 AND board.is_default
-       RETURNING id`,
-      [organizationId, id],
-    );
-    if (!copied.rowCount) await client.query("INSERT INTO lead_columns (organization_id, board_id, name, position) VALUES ($1, $2, 'Primer contacto', 0)", [organizationId, id]);
+    await client.query("INSERT INTO lead_columns (organization_id, board_id, name, position) VALUES ($1, $2, 'Primer contacto', 0)", [organizationId, created.rows[0].id]);
     return created.rows[0];
   });
   await realtime.publish(organizationId, 'lead.board_created');
