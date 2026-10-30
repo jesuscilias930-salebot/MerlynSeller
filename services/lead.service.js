@@ -188,8 +188,9 @@ const remapColumns = async (client, organizationId, map) => {
     await client.query(
       `UPDATE remarketing_move_rules SET
          after_send_column_id = CASE WHEN after_send_column_id = $3 THEN $1 ELSE after_send_column_id END,
-         on_reply_column_id = CASE WHEN on_reply_column_id = $3 THEN $1 ELSE on_reply_column_id END, updated_at = now()
-       WHERE organization_id = $2 AND $3 IN (after_send_column_id, on_reply_column_id)`,
+         on_reply_column_id = CASE WHEN on_reply_column_id = $3 THEN $1 ELSE on_reply_column_id END,
+         home_column_id = CASE WHEN home_column_id = $3 THEN $1 ELSE home_column_id END, updated_at = now()
+       WHERE organization_id = $2 AND $3 IN (after_send_column_id, on_reply_column_id, home_column_id)`,
       [to, organizationId, from],
     );
   }

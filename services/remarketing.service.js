@@ -161,6 +161,18 @@ exports.queueCampaign = async (organizationId, input) => {
   return { campaignId: result.campaignId, queued: result.queued, skipped: result.skipped, scenariosEnabled: result.scenariosEnabled };
 };
 
+/** Mensaje libre: cuántos leads de la columna tienen la ventana de 24 h abierta. */
+exports.previewCampaign = async (organizationId, columnId) => {
+  if (!z.string().uuid().safeParse(columnId).success) { const error = new Error('Elige la columna'); error.status = 400; throw error; }
+  const row = (await db.query(`
+    SELECT count(*)::int AS total,
+      count(*) FILTER (WHERE EXISTS (SELECT 1 FROM messages incoming WHERE incoming.conversation_id = c.id AND incoming.direction = 'inbound'
+        AND incoming.created_at > now() - interval '24 hours'))::int AS eligible
+    FROM conversations c WHERE c.organization_id = $1 AND c.lead_column_id = $2
+  `, [organizationId, columnId])).rows[0];
+  return { total: row.total, eligible: row.eligible };
+};
+
 // ---- Envío masivo con plantilla oficial ----
 // Las plantillas aprobadas llegan aunque hayan pasado las 24 h, así que se envían a todos
 // los leads de WhatsApp de la columna. Para evitar envíos dobles se omite a quien ya recibió

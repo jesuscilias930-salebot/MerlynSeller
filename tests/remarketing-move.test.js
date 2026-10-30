@@ -21,9 +21,12 @@ test('guarda la configuración por plantilla y la borra si no hay columnas', asy
     return null;
   }, async (calls) => {
     await moves.save('org', { templateId: tpl, afterSendColumnId: col, onReplyColumnId: col });
-    assert.ok(calls.some((call) => call.sql.includes('INSERT INTO remarketing_move_rules') && call.args.join() === ['org', tpl, col, col].join()));
+    assert.ok(calls.some((call) => call.sql.includes('INSERT INTO remarketing_move_rules') && call.args.join() === ['org', tpl, col, col, ''].join()));
     await moves.save('org', { templateId: tpl });
     assert.ok(calls.at(-1).sql.startsWith('DELETE FROM remarketing_move_rules'));
+    await moves.save('org', { templateId: tpl, homeColumnId: col });
+    const insert = calls.at(-1);
+    assert.ok(insert.sql.includes('home_column_id') && insert.args[4] === col, 'solo la columna del tablero también se guarda');
     await assert.rejects(moves.save('org', { afterSendColumnId: col }), { status: 400 });
   });
 });

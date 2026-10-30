@@ -3,16 +3,18 @@ const db = require('../lib/db');
 const realtime = require('../lib/realtime');
 
 // Remarketing → mover a columna, configurado por plantilla oficial o mensaje guardado.
+//  · Columna del tablero: el mensaje aparece en esa columna para enviarlo desde ahí.
 //  · Al enviarse el mensaje: mueve el lead como cualquier automatización (respeta los fijados 📌).
 //  · Si el lead responde: lo mueve siempre (aunque esté fijado o en otro dashboard) y lo deja fijado.
 //    Solo la primera respuesta a cada campaña. Sin columna configurada se usa R-HOT como antes.
 const id = z.string().uuid().nullable().optional().transform((value) => value || null);
-const schema = z.object({ templateId: id, presetId: id, afterSendColumnId: id, onReplyColumnId: id })
+const schema = z.object({ templateId: id, presetId: id, homeColumnId: id, afterSendColumnId: id, onReplyColumnId: id })
   .refine((value) => Boolean(value.templateId) !== Boolean(value.presetId), 'Elige una plantilla o un mensaje guardado');
 const fail = (status, message) => { const error = new Error(message); error.status = status; throw error; };
 
 exports.list = async (organizationId) => (await db.query(
-  `SELECT template_id AS "templateId", preset_id AS "presetId", after_send_column_id AS "afterSendColumnId", on_reply_column_id AS "onReplyColumnId"
+  `SELECT template_id AS "templateId", preset_id AS "presetId", home_column_id AS "homeColumnId",
+     after_send_column_id AS "afterSendColumnId", on_reply_column_id AS "onReplyColumnId"
    FROM remarketing_move_rules WHERE organization_id = $1`,
   [organizationId],
 )).rows;
@@ -25,7 +27,7 @@ exports.save = async (organizationId, input) => {
     ? await db.query('SELECT 1 FROM whatsapp_templates WHERE id = $1 AND organization_id = $2', [value.templateId, organizationId])
     : await db.query('SELECT 1 FROM remarketing_presets WHERE id = $1 AND organization_id = $2', [value.presetId, organizationId]);
   if (!owner.rows[0]) fail(404, value.templateId ? 'La plantilla no existe' : 'El mensaje guardado no existe');
-  const columns = [value.afterSendColumnId, value.onReplyColumnId].filter(Boolean);
+  const columns = [value.homeColumnId, value.afterSendColumnId, value.onReplyColumnId].filter(Boolean);
   if (columns.length) {
     const found = await db.query('SELECT count(*)::int AS n FROM lead_columns WHERE organization_id = $1 AND id = ANY($2::uuid[])', [organizationId, columns]);
     if (found.rows[0].n !== new Set(columns).size) fail(400, 'La columna elegida ya no existe');
@@ -36,13 +38,14 @@ exports.save = async (organizationId, input) => {
     await db.query(`DELETE FROM remarketing_move_rules WHERE organization_id = $1 AND ${key} = $2`, [organizationId, keyValue]);
   } else {
     await db.query(
-      `INSERT INTO remarketing_move_rules (organization_id, ${key}, after_send_column_id, on_reply_column_id) VALUES ($1, $2, $3, $4)
+      `INSERT INTO remarketing_move_rules (organization_id, ${key}, after_send_column_id, on_reply_column_id, home_column_id) VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (organization_id, ${key}) WHERE ${key} IS NOT NULL
-       DO UPDATE SET after_send_column_id = EXCLUDED.after_send_column_id, on_reply_column_id = EXCLUDED.on_reply_column_id, updated_at = now()`,
-      [organizationId, keyValue, value.afterSendColumnId, value.onReplyColumnId],
+       DO UPDATE SET after_send_column_id = EXCLUDED.after_send_column_id, on_reply_column_id = EXCLUDED.on_reply_column_id,
+         home_column_id = EXCLUDED.home_column_id, updated_at = now()`,
+      [organizationId, keyValue, value.afterSendColumnId, value.onReplyColumnId, value.homeColumnId],
     );
   }
-  return { templateId: value.templateId, presetId: value.presetId, afterSendColumnId: value.afterSendColumnId, onReplyColumnId: value.onReplyColumnId };
+  return { templateId: value.templateId, presetId: value.presetId, homeColumnId: value.homeColumnId, afterSendColumnId: value.afterSendColumnId, onReplyColumnId: value.onReplyColumnId };
 };
 
 /** Configuración vigente para una campaña que se está creando (se copia a la campaña). */
