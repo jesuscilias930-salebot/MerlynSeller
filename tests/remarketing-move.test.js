@@ -51,12 +51,13 @@ test('al responder mueve y fija solo la primera vez; sin configuración avisa pa
   });
 });
 
-test('al enviarse respeta a los leads fijados', async () => {
+test('al enviarse mueve aunque el lead esté fijado y le quita el fijado', async () => {
   await withDb((sql) => {
     if (sql.includes('JOIN remarketing_campaigns')) return { rows: [{ organization_id: 'org', conversation_id: 'conv', after_send_column_id: col }] };
     return null;
   }, async (calls) => {
     assert.equal(await moves.afterSent('msg'), false);
-    assert.match(calls.at(-1).sql, /column_pinned_at IS NULL/);
+    assert.doesNotMatch(calls.at(-1).sql, /column_pinned_at IS NULL/);
+    assert.match(calls.at(-1).sql, /column_pinned_at = NULL/);
   });
 });

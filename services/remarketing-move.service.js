@@ -4,7 +4,8 @@ const realtime = require('../lib/realtime');
 
 // Remarketing → mover a columna, configurado por plantilla oficial o mensaje guardado.
 //  · Columna del tablero: el mensaje aparece en esa columna para enviarlo desde ahí.
-//  · Al enviarse el mensaje: mueve el lead como cualquier automatización (respeta los fijados 📌).
+//  · Al enviarse el mensaje: mueve el lead aunque esté fijado 📌 (p. ej. por una regla de primer contacto)
+//    y le quita el fijado, como si lo movieras a mano.
 //  · Si el lead responde: lo mueve siempre (aunque esté fijado o en otro dashboard) y lo deja fijado.
 //    Solo la primera respuesta a cada campaña. Sin columna configurada se usa R-HOT como antes.
 const id = z.string().uuid().nullable().optional().transform((value) => value || null);
@@ -59,7 +60,7 @@ exports.forCampaign = async (client, organizationId, { templateId, presetId }) =
   return row || { afterSendColumnId: null, onReplyColumnId: null };
 };
 
-/** Tras enviarse un mensaje de campaña: mover a la columna «al enviar» (respeta los leads fijados). */
+/** Tras enviarse un mensaje de campaña: mover a la columna «al enviar», aunque esté fijado. */
 exports.afterSent = async (messageId) => {
   const row = (await db.query(
     `SELECT m.organization_id, m.conversation_id, campaign.after_send_column_id
@@ -69,8 +70,8 @@ exports.afterSent = async (messageId) => {
   )).rows[0];
   if (!row) return false;
   const moved = await db.query(
-    `UPDATE conversations SET lead_column_id = $3, updated_at = now()
-     WHERE id = $1 AND organization_id = $2 AND column_pinned_at IS NULL AND lead_column_id IS DISTINCT FROM $3 RETURNING id`,
+    `UPDATE conversations SET lead_column_id = $3, column_pinned_at = NULL, column_pinned_rule_id = NULL, updated_at = now()
+     WHERE id = $1 AND organization_id = $2 AND lead_column_id IS DISTINCT FROM $3 RETURNING id`,
     [row.conversation_id, row.organization_id, row.after_send_column_id],
   );
   if (moved.rows[0]) await realtime.publish(row.organization_id, 'lead.moved', row.conversation_id);
