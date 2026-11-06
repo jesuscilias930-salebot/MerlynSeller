@@ -62,3 +62,27 @@ test('solo acepta la página o cuenta de Instagram configurada', async () => {
   } finally { db.query = original; }
   assert.deepEqual(meta.statusUpdates({ sender: { id: 'P' }, delivery: { mids: ['a'] }, read: { watermark: 10 } }), [{ id: 'a', status: 'delivered' }, { watermark: 10, status: 'read', sender: 'P' }]);
 });
+
+test('el nombre del contacto se toma de la conversación si Meta no da el perfil', async () => {
+  const original = global.fetch;
+  const urls = [];
+  global.fetch = async (url) => {
+    urls.push(String(url));
+    if (String(url).includes('/conversations')) return { ok: true, json: async () => ({ data: [{ participants: { data: [{ id: '111', name: 'Merlyn Cilias' }, { id: 'PSID9', name: 'Ana López' }] } }] }) };
+    return { ok: false, status: 400, json: async () => ({ error: { code: 100, error_subcode: 33, message: 'Unsupported get request' } }) };
+  };
+  const warn = console.error; console.error = () => {};
+  try {
+    await withEnv(async () => {
+      assert.deepEqual(await meta.profile('messenger', 'PSID9'), { name: 'Ana López', username: null });
+      assert.match(urls[1], /111\/conversations\?platform=messenger&user_id=PSID9&fields=participants/);
+      urls.length = 0;
+      global.fetch = async (url) => (String(url).includes('/conversations')
+        ? { ok: true, json: async () => ({ data: [{ participants: { data: [{ id: '222', username: 'merlyn' }, { id: 'IG5', username: 'cliente.ig' }] } }] }) }
+        : { ok: false, status: 400, json: async () => ({ error: { code: 100 } }) });
+      assert.deepEqual(await meta.profile('instagram', 'IG5'), { name: '@cliente.ig', username: 'cliente.ig' });
+      global.fetch = async () => ({ ok: true, json: async () => ({ first_name: 'Luis', last_name: 'Pérez' }) });
+      assert.deepEqual(await meta.profile('messenger', 'P'), { name: 'Luis Pérez', username: null });
+    });
+  } finally { global.fetch = original; console.error = warn; }
+});

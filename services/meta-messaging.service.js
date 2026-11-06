@@ -170,13 +170,25 @@ exports.send = async (message) => {
   return { accepted: true, messages: [{ id: result.message_id }] };
 };
 
-/** Nombre del contacto (Messenger: nombre; Instagram: nombre y usuario). Nunca detiene el guardado. */
+/** Nombre del contacto (Messenger: nombre; Instagram: nombre y usuario). Nunca detiene el guardado.
+ *  1) Perfil del usuario (requiere la función «Business Asset User Profile Access» de Meta).
+ *  2) Si Meta lo rechaza, los participantes de la conversación de la página (solo pide pages_messaging). */
 exports.profile = async (channel, externalId) => {
   try {
-    const fields = channel === 'instagram' ? 'name,username' : 'first_name,last_name';
+    const fields = channel === 'instagram' ? 'name,username' : 'first_name,last_name,name';
     const data = await graph(`${encodeURIComponent(externalId)}?fields=${fields}`);
-    const name = channel === 'instagram' ? data.name || (data.username ? `@${data.username}` : '') : [data.first_name, data.last_name].filter(Boolean).join(' ');
-    return { name: name || null, username: data.username || null };
+    const name = channel === 'instagram' ? data.name || (data.username ? `@${data.username}` : '') : [data.first_name, data.last_name].filter(Boolean).join(' ') || data.name;
+    if (name) return { name, username: data.username || null };
+  } catch { /* Se intenta con la conversación. */ }
+  try {
+    const { pageId } = config();
+    const platform = channel === 'instagram' ? 'instagram' : 'messenger';
+    const data = await graph(`${encodeURIComponent(pageId)}/conversations?platform=${platform}&user_id=${encodeURIComponent(externalId)}&fields=participants`);
+    const participants = (data.data || []).flatMap((conversation) => conversation.participants?.data || []);
+    const person = participants.find((item) => String(item.id) === String(externalId)) || participants.find((item) => String(item.id) !== String(pageId));
+    const username = person?.username || null;
+    const name = person?.name || (username ? `@${username}` : '');
+    return { name: name || null, username };
   } catch {
     return { name: null, username: null };
   }
