@@ -279,3 +279,29 @@ test('el botón de la plantilla reenvía el catálogo del escenario aunque el cl
     assert.deepEqual(docs, [], 'escrito a mano respeta «ya está en la conversación»');
   } finally { db.query = original.query; conversations.queueDocument = original.doc; conversations.queueText = original.text; scenarios.list = original.list; }
 });
+
+test('un paso limitado a ciertos canales se salta en los demás', async () => {
+  const flow = scenarios.parseDefinition({ name: 'Catálogo', triggerExamples: ['catálogo'], steps: [
+    { id: 'pdf', type: 'send_text', label: 'PDF', body: 'Te mando el PDF', channels: ['whatsapp', 'messenger'], nextStepId: 'fotos' },
+    { id: 'fotos', type: 'send_text', label: 'Fotos', body: 'Te mando las fotos', channels: ['instagram'], nextStepId: 'fin' },
+    { id: 'fin', type: 'end', label: 'Fin' },
+  ] });
+  assert.deepEqual(flow.steps[0].channels, ['whatsapp', 'messenger']);
+  assert.equal(scenarios.parseDefinition({ name: 'Prueba', triggerExamples: ['xx'], steps: [{ id: 'a', type: 'end', label: 'Fin', channels: ['whatsapp', 'messenger', 'instagram'] }] }).steps[0].channels, undefined, 'los tres = todos');
+  const rows = [{ ...flow, id: 'c', key: 'catalogo', isActive: true, canInterrupt: false, position: 0, priority: 0 }];
+  for (const [channel, expected] of [['instagram', ['Te mando las fotos']], ['whatsapp', ['Te mando el PDF']], [null, ['Te mando el PDF']]]) {
+    const original = { query: db.query, text: conversations.queueText, list: scenarios.list };
+    const sent = [];
+    db.query = async (sql) => {
+      if (sql.includes('scenario_enabled')) return { rows: [{ scenario_enabled: true }] };
+      if (sql.includes("COALESCE(ct.channel, 'whatsapp')")) return { rows: [{ channel: channel || 'whatsapp' }] };
+      return { rows: [] };
+    };
+    scenarios.list = async () => rows;
+    conversations.queueText = async (...args) => { sent.push(args[2].body); return {}; };
+    try {
+      await scenarios.processIncoming('org', 'conv', 'quiero el catalogo');
+      assert.deepEqual(sent, expected, `canal ${channel}`);
+    } finally { db.query = original.query; conversations.queueText = original.text; scenarios.list = original.list; }
+  }
+});

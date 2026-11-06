@@ -57,6 +57,8 @@ const stepSchema = z.object({
     "end",
   ]),
   label: z.string().trim().min(1).max(100),
+  // Canales donde se ejecuta el paso; sin lista = todos. En los demás canales el paso se salta.
+  channels: z.array(z.enum(["whatsapp", "messenger", "instagram"])).min(1, "Elige al menos un canal para el paso").max(3).optional(),
   body: z.string().max(4096).optional(),
   caption: z.string().max(1024).optional(),
   fallbackBody: z.string().trim().max(4096).optional(),
@@ -173,6 +175,13 @@ const optionMessage = (step) => ({
 });
 // Valida el mensaje con los mismos límites de WhatsApp que el chat y fija ids
 // estables por opción para reconocer la respuesta del cliente.
+// Los tres canales equivalen a «todos»: no se guarda la lista.
+const withChannels = (step) => {
+  const channels = [...new Set(step.channels || [])];
+  const { channels: _omit, ...rest } = step;
+  return channels.length && channels.length < 3 ? { ...rest, channels } : rest;
+};
+
 const normalizeOptionsStep = (step, index) => {
   let message;
   try {
@@ -233,7 +242,7 @@ const parse = (input) => {
     return {
       ...result.data,
       steps: result.data.steps.map((step, index) =>
-        step.type === "send_options" ? normalizeOptionsStep(step, index) : step,
+        withChannels(step.type === "send_options" ? normalizeOptionsStep(step, index) : step),
       ),
     };
   const error = new Error(describeIssue(result.error.issues[0], input));
@@ -680,6 +689,12 @@ const optionForReply = (step, text, optionId) => {
 };
 exports.optionForReply = optionForReply;
 
+/** Canal del chat (WhatsApp, Messenger o Instagram). */
+const conversationChannel = async (organizationId, conversationId) => (await db.query(
+  "SELECT COALESCE(ct.channel, 'whatsapp') AS channel FROM conversations c JOIN contacts ct ON ct.id = c.contact_id WHERE c.id = $1 AND c.organization_id = $2",
+  [conversationId, organizationId],
+)).rows[0]?.channel || "whatsapp";
+
 const run = async (
   organizationId,
   conversationId,
@@ -701,6 +716,15 @@ const run = async (
     const error = new Error("Scenario step not found");
     error.status = 400;
     throw error;
+  }
+  // Paso limitado a ciertos canales (p. ej. PDF solo en WhatsApp): en otro canal se salta.
+  if (step.channels?.length && step.channels.length < 3) {
+    if (!runOptions.channel) runOptions = { ...runOptions, channel: await conversationChannel(organizationId, conversationId) };
+    if (!step.channels.includes(runOptions.channel)) {
+      log("info", "Scenario step skipped for this channel", { scenario: scenario.key, step: step.id, channel: runOptions.channel });
+      if (step.nextStepId) return run(organizationId, conversationId, scenario, step.nextStepId, depth + 1, runOptions);
+      return complete(organizationId, conversationId);
+    }
   }
   if (step.type === "wait_reply" || step.type === "budget_recommendation") {
     await setCurrentStep(organizationId, conversationId, scenario.key, step.id);

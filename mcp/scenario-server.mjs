@@ -13,6 +13,7 @@ export const definitionSchema = z.object({
   steps: z.array(z.object({
     id: reference, label: z.string().min(1).max(100), type: z.enum(['send_text','send_catalog','send_media','wait_reply','send_options','budget_recommendation','move_column','end']),
     body: z.string().max(4096).optional(), caption: z.string().max(1024).optional(), fallbackBody: z.string().max(4096).optional(),
+    channels: z.array(z.enum(['whatsapp','messenger','instagram'])).min(1).max(3).optional().describe('Canales donde corre el paso; omitir = todos. Instagram no admite documentos (PDF): usa send_media con imágenes.'),
     resendCatalog: z.boolean().optional(), nextStepId: reference.optional(), fallbackStepId: reference.optional(), columnId: z.uuid().optional(),
     items: z.array(media).max(20).optional(),
     header: z.string().max(60).optional(), footer: z.string().max(60).optional(), format: z.enum(['auto','buttons','list']).optional(),
