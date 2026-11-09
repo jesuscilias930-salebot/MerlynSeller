@@ -69,7 +69,7 @@ const stepSchema = z.object({
         mediaId: z.string().trim().min(1).max(256),
         filename: z.string().max(240).optional(),
         caption: z.string().max(1024).optional(),
-        type: z.enum(["image", "document"]).optional(),
+        type: z.enum(["image", "document", "video"]).optional(),
       }),
     )
     .max(20)
@@ -373,6 +373,13 @@ exports.remove = async (organizationId, id) =>
     );
     return { deleted: true };
   });
+/** Video para un paso «Enviar imágenes, videos o documentos»: se convierte a MP4 y se sube una sola vez a Meta. */
+exports.uploadEvidenceVideo = async (input) => {
+  const media = await messageService.prepareVideo(input);
+  const uploaded = await messageService.uploadMedia(media);
+  return { mediaId: uploaded.mediaId, filename: input.filename || "video.mp4" };
+};
+
 exports.uploadEvidence = async (input) => {
   const allowed = new Set([
     "image/jpeg",
@@ -759,7 +766,9 @@ const run = async (
     await queueStepPackages(organizationId, conversationId, step.packageIds);
   if (step.type === "send_media")
     for (const item of step.items || []) {
-      if (item.type === "document")
+      if (item.type === "video")
+        await conversations.queueExistingMedia(organizationId, conversationId, "video", item.mediaId, item.caption);
+      else if (item.type === "document")
         await conversations.queueDocument(organizationId, conversationId, {
           mediaId: item.mediaId,
           filename: item.filename || undefined,

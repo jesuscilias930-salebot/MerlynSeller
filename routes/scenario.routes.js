@@ -12,6 +12,8 @@ router.delete('/mcp-session', async (req, res, next) => {
 });
 router.get('/', controller.list);
 router.post('/evidence/upload', require('express').raw({ type: isScenarioFile, limit: '25mb' }), controller.uploadEvidence);
+// Videos: se guardan en un archivo temporal (hasta 250 MB) y se convierten a MP4 antes de subirlos a Meta.
+router.post('/evidence/upload-video', require('../middleware/video-upload.middleware').videoUpload(controller.uploadEvidenceVideo));
 router.post('/', controller.create);
 router.put('/order', controller.reorder);
 router.put('/:id', controller.update);

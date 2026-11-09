@@ -48,7 +48,7 @@ const send = (message) => message.channel && message.channel !== 'whatsapp'
       : message.type === 'audio'
         ? messageService.sendAttachment({ to: message.phone_number, type: 'audio', id: message.media_id })
         : message.type === 'video'
-          ? messageService.sendVideo({ to: message.phone_number, id: message.media_id })
+          ? messageService.sendVideo({ to: message.phone_number, id: message.media_id, caption: message.body || undefined })
           : message.type === 'interactive'
             ? sendInteractive(message)
             : message.type === 'template'

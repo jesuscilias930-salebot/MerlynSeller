@@ -305,3 +305,20 @@ test('un paso limitado a ciertos canales se salta en los demás', async () => {
     } finally { db.query = original.query; conversations.queueText = original.text; scenarios.list = original.list; }
   }
 });
+
+test('un paso de medios puede enviar videos', async () => {
+  const flow = scenarios.parseDefinition({ name: 'Video', triggerExamples: ['video'], steps: [
+    { id: 'v', type: 'send_media', label: 'Video', items: [{ mediaId: 'vid1', type: 'video', caption: 'Mira el producto', filename: 'demo.mp4' }, { mediaId: 'img1', type: 'image' }], nextStepId: 'fin' },
+    { id: 'fin', type: 'end', label: 'Fin' },
+  ] });
+  const rows = [{ ...flow, id: 'c', key: 'video', isActive: true, canInterrupt: false, position: 0, priority: 0 }];
+  const original = { query: db.query, existing: conversations.queueExistingMedia, list: scenarios.list };
+  const queued = [];
+  db.query = async (sql) => (sql.includes('scenario_enabled') ? { rows: [{ scenario_enabled: true }] } : { rows: [] });
+  scenarios.list = async () => rows;
+  conversations.queueExistingMedia = async (_org, _conv, type, mediaId, caption) => { queued.push([type, mediaId, caption]); return {}; };
+  try {
+    await scenarios.processIncoming('org', 'conv', 'quiero ver el video');
+    assert.deepEqual(queued, [['video', 'vid1', 'Mira el producto'], ['image', 'img1', undefined]]);
+  } finally { db.query = original.query; conversations.queueExistingMedia = original.existing; scenarios.list = original.list; }
+});

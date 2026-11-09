@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createScenarioClient } from './scenario-client.mjs';
 
 const reference = z.string().trim().min(1).max(80);
-const media = z.object({ mediaId: z.string().min(1).max(256), filename: z.string().max(240).optional(), caption: z.string().max(1024).optional(), type: z.enum(['image','document']).optional() });
+const media = z.object({ mediaId: z.string().min(1).max(256), filename: z.string().max(240).optional(), caption: z.string().max(1024).optional(), type: z.enum(['image','document','video']).optional() });
 export const definitionSchema = z.object({
   name: z.string().trim().min(2).max(100), triggerExamples: z.array(z.string().trim().min(2).max(240)).min(1).max(30),
   aiDescription: z.string().trim().min(10).max(700).nullable().optional(), priority: z.number().int().min(0).max(1000).default(0),

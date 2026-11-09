@@ -363,10 +363,10 @@ exports.queueMedia = async (organizationId, conversationId, type, input) => {
 // Reuses a Meta media id already uploaded by the organization. Scenario
 // evidence is therefore uploaded only once and can be sent to many leads.
 exports.queueExistingMedia = async (organizationId, conversationId, type, mediaId, caption) => {
-  if (!['image', 'sticker'].includes(type)) { const error = new Error('Only images and stickers can be reused'); error.status = 400; throw error; }
+  if (!['image', 'sticker', 'video'].includes(type)) { const error = new Error('Only images, videos and stickers can be reused'); error.status = 400; throw error; }
   const result = await db.query(
     "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status) SELECT $1, id, 'outbound', $3, $4, $5, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
-    [organizationId, conversationId, type, type === 'image' ? caption || null : null, mediaId],
+    [organizationId, conversationId, type, type === 'image' || type === 'video' ? caption || null : null, mediaId],
   );
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add(`send-${type}`, { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
