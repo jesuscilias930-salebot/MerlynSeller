@@ -11,6 +11,9 @@ const createSchema = z.object({ phoneNumber: phone, name: z.string().trim().max(
 const textSchema = z.object({ body: z.string().trim().min(1).max(4096), replyToMessageId: z.string().uuid().optional() });
 const autoReplySchema = z.object({ enabled: z.boolean() });
 const scenarioSchema = z.object({ enabled: z.boolean() });
+const quoteBundleSchema = z.object({
+  bundle: z.object({ id: z.union([z.string().trim().min(1).max(80), z.number().int().positive()]).transform(String), name: z.string().trim().min(1).max(160) }).nullable(),
+});
 const documentSchema = z.object({
   mediaId: z.string().trim().min(1).max(256),
   filename: z.string().trim().min(1).max(240).optional(),
@@ -58,6 +61,7 @@ exports.messagePreview = messagePreview;
 
 exports.list = async (organizationId, userId) => (await db.query(`
   SELECT c.id, c.contact_id AS "contactId", c.status, c.updated_at, c.auto_reply_enabled AS "autoReplyEnabled", c.scenario_enabled AS "scenarioEnabled", c.lead_column_id AS "leadColumnId", ct.phone_number, ct.name,
+    c.quote_bundle_id AS "quoteBundleId", c.quote_bundle_name AS "quoteBundleName",
     ct.channel, ct.username,
     latest.body AS latest_body, latest.type AS latest_type, latest.filename AS latest_filename, latest.deleted AS latest_deleted,
     latest.created_at AS "lastMessageAt",
@@ -228,6 +232,13 @@ exports.markRead = async (organizationId, userId, conversationId) => {
 exports.setAutoReply = async (organizationId, conversationId, input) => {
   const data = validation(autoReplySchema, input);
   const result = await db.query('UPDATE conversations SET auto_reply_enabled=$3, updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING auto_reply_enabled AS "autoReplyEnabled"', [conversationId, organizationId, data.enabled]);
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  return result.rows[0];
+};
+// Paquete con el que el cotizador del chat abre; null lo quita.
+exports.setQuoteBundle = async (organizationId, conversationId, input) => {
+  const { bundle } = validation(quoteBundleSchema, input);
+  const result = await db.query('UPDATE conversations SET quote_bundle_id=$3,quote_bundle_name=$4,quote_bundle_updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING quote_bundle_id AS "quoteBundleId",quote_bundle_name AS "quoteBundleName"', [conversationId, organizationId, bundle?.id ?? null, bundle?.name ?? null]);
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   return result.rows[0];
 };

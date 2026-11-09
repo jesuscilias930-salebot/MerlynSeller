@@ -39,6 +39,7 @@ exports.markRead = async (req, res, next) => {
 exports.setAutoReply = async (req, res, next) => {
     try { return res.json(await conversations.setAutoReply(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); }
 };
+exports.setQuoteBundle = async (req, res, next) => { try { return res.json(await conversations.setQuoteBundle(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); } };
 exports.setScenarioEnabled = async (req, res, next) => { try { return res.json(await conversations.setScenarioEnabled(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); } };
 exports.remove = async (req, res, next) => {
     try { return res.json(await conversations.remove(req.auth.organizationId, req.params.id)); } catch (error) { return handle(error, res, next); }

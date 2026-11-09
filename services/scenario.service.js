@@ -108,6 +108,11 @@ const scenarioSchema = z
     canInterrupt: z.boolean().default(true),
     isActive: z.boolean().default(true),
     steps: z.array(stepSchema).min(1).max(60),
+    // Paquete (bundle de Control) que el cotizador del chat tendrá seleccionado cuando este escenario inicie.
+    quoteBundle: z
+      .object({ id: z.union([z.string().trim().min(1).max(80), z.number().int().positive()]).transform(String), name: z.string().trim().min(1).max(160) })
+      .nullable()
+      .optional(),
   })
   .superRefine((value, ctx) => {
     const ids = new Set();
@@ -254,6 +259,7 @@ const toRow = (row) => ({
   ...row,
   triggerExamples: row.triggerExamples || [],
   steps: row.steps || [],
+  quoteBundle: row.quoteBundle || null,
 });
 const slug = (name) =>
   normalize(name)
@@ -264,7 +270,7 @@ const slug = (name) =>
 exports.list = async (organizationId) =>
   (
     await db.query(
-      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY position ASC, created_at ASC',
+      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY position ASC, created_at ASC',
       [organizationId],
     )
   ).rows.map(toRow);
@@ -276,7 +282,7 @@ exports.create = async (organizationId, input) => {
     const key = suffix ? `${base}_${suffix + 1}` : base;
     try {
       const result = await db.query(
-        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,ai_description,priority,can_interrupt,position,steps,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$1),0),$9,\'{}\') RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,updated_at AS "updatedAt"',
+        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,ai_description,priority,can_interrupt,position,steps,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$1),0),$9,jsonb_build_object(\'quoteBundle\',$10::jsonb)) RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",updated_at AS "updatedAt"',
         [
           organizationId,
           key,
@@ -287,6 +293,7 @@ exports.create = async (organizationId, input) => {
           value.priority,
           value.canInterrupt,
           JSON.stringify(value.steps),
+          JSON.stringify(value.quoteBundle || null),
         ],
       );
       return toRow(result.rows[0]);
@@ -301,7 +308,7 @@ exports.create = async (organizationId, input) => {
 exports.update = async (organizationId, id, input) => {
   const value = parse(input);
   const result = await db.query(
-    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,updated_at AS "updatedAt"',
+    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=CASE WHEN $10::boolean THEN COALESCE(config,\'{}\'::jsonb) || jsonb_build_object(\'quoteBundle\',$11::jsonb) ELSE config END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",updated_at AS "updatedAt"',
     [
       id,
       organizationId,
@@ -312,6 +319,9 @@ exports.update = async (organizationId, id, input) => {
       value.priority,
       value.canInterrupt,
       JSON.stringify(value.steps),
+      // Sin el campo (p. ej. una edición desde el MCP) se conserva el paquete ya configurado.
+      value.quoteBundle !== undefined,
+      JSON.stringify(value.quoteBundle || null),
     ],
   );
   if (!result.rows[0]) {
@@ -456,6 +466,18 @@ const complete = (organizationId, conversationId) =>
     "UPDATE conversation_scenario_states SET completed_at=now(),updated_at=now() WHERE organization_id=$1 AND conversation_id=$2 AND completed_at IS NULL",
     [organizationId, conversationId],
   );
+// Al iniciar un escenario con paquete configurado, el cotizador del chat lo tendrá seleccionado.
+const applyQuoteBundle = async (organizationId, conversationId, scenario) => {
+  if (!scenario.quoteBundle?.id) return;
+  try {
+    await db.query(
+      "UPDATE conversations SET quote_bundle_id=$3,quote_bundle_name=$4,quote_bundle_updated_at=now() WHERE id=$1 AND organization_id=$2",
+      [conversationId, organizationId, String(scenario.quoteBundle.id), scenario.quoteBundle.name],
+    );
+  } catch (error) {
+    log("warn", "Scenario quote bundle could not be applied", { scenario: scenario.key, error: error.message });
+  }
+};
 const byId = (scenario, id) => scenario.steps.find((step) => step.id === id);
 const aiMatchScenario = async (text, scenarios) => {
   if (
@@ -809,6 +831,11 @@ const specificity = (text, examples) => Math.max(0, ...(examples || []).map((exa
   return ` ${text} `.includes(` ${phrase} `) ? phrase.split(" ").length : 0;
 }));
 
+const start = async (organizationId, conversationId, scenario, runOptions) => {
+  await applyQuoteBundle(organizationId, conversationId, scenario);
+  return run(organizationId, conversationId, scenario, scenario.steps[0].id, 0, runOptions);
+};
+
 // options.explicit: el cliente tocó un botón (p. ej. la respuesta rápida de una plantilla).
 // Es una intención clara, así que puede reemplazar el escenario en curso aunque no admita interrupciones.
 exports.processIncoming = async (organizationId, conversationId, incoming, options = {}) => {
@@ -852,7 +879,7 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
     }
     if (newStart && newStart.key !== scenario.key && (newStart.canInterrupt || options.explicit)) {
       await complete(organizationId, conversationId);
-      await run(organizationId, conversationId, newStart, newStart.steps[0].id, 0, { resendCatalog: options.explicit === true });
+      await start(organizationId, conversationId, newStart, { resendCatalog: options.explicit === true });
       log("info", "Conversation scenario replaced", { from: scenario.key, to: newStart.key });
       return { handled: true, requiresHuman: false };
     }
@@ -888,7 +915,7 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
     // lo vuelve a empezar en lugar de tratarse como respuesta al paso donde se quedó.
     if (options.explicit && newStart && newStart.key === scenario.key) {
       await complete(organizationId, conversationId);
-      await run(organizationId, conversationId, newStart, newStart.steps[0].id, 0, { resendCatalog: options.explicit === true });
+      await start(organizationId, conversationId, newStart, { resendCatalog: options.explicit === true });
       log("info", "Conversation scenario restarted by option reply", { scenario: scenario.key, step: step.id });
       return { handled: true, requiresHuman: false };
     }
@@ -918,7 +945,7 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
   }
 
   if (!newStart) return { handled: false, requiresHuman: false };
-  await run(organizationId, conversationId, newStart, newStart.steps[0].id, 0, { resendCatalog: options.explicit === true });
+  await start(organizationId, conversationId, newStart, { resendCatalog: options.explicit === true });
   log("info", "Conversation scenario started", { scenario: newStart.key });
   return { handled: true, requiresHuman: false };
 };

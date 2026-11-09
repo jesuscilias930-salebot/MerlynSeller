@@ -64,6 +64,7 @@ exports.board = async (organizationId, userId, boardId) => {
       c.lead_column_id,
       c.auto_reply_enabled AS "autoReplyEnabled",
       c.scenario_enabled AS "scenarioEnabled",
+      c.quote_bundle_id AS "quoteBundleId", c.quote_bundle_name AS "quoteBundleName",
       c.status,
       c.updated_at,
       ct.phone_number,

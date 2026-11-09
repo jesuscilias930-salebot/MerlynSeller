@@ -18,6 +18,7 @@ router.post('/:id/messages/:messageId/reaction', controller.react);
 router.post('/:id/read', controller.markRead);
 router.patch('/:id/automation', controller.setAutoReply);
 router.patch('/:id/scenarios', controller.setScenarioEnabled);
+router.patch('/:id/quote-bundle', controller.setQuoteBundle);
 router.post('/:id/meta/purchase', controller.reportPurchase);
 router.get('/:id/document-options', controller.documentOptions);
 router.get('/:id/messages/:messageId/media', controller.media);
