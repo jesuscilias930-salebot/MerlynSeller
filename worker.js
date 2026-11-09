@@ -106,6 +106,14 @@ const drainConversation = async (conversationId, jobId) => {
         await db.query("UPDATE messages SET status = 'sent', provider_message_id = $2, updated_at = now() WHERE id = $1", [message.id, sent.messages[0]?.id || null]);
         await realtime.publish(message.organization_id, 'message.sent', message.conversation_id);
         if (message.type === 'template') await notifyReminder(message.id, 'sent');
+        // Archivos (video, documento, imagen): esperar a que lleguen antes de mandar el siguiente,
+        // para que el cliente los vea en orden.
+        const pacing = await require('./lib/outbound-pacing').waitForDelivery({
+          db, messageId: message.id, type: message.type,
+          hasNext: async () => Boolean((await db.query("SELECT 1 FROM messages WHERE conversation_id = $1 AND direction = 'outbound' AND status = 'pending' AND deleted_at IS NULL AND id <> $2 LIMIT 1", [conversationId, message.id])).rows[0]),
+          keepAlive: async () => Boolean(await refreshLock(lockKey, token)),
+        }).catch((error) => ({ waited: 0, reason: `error:${error.name}` }));
+        if (pacing.waited) console.log(JSON.stringify({ level: 'info', message: 'Waited for media delivery before next message', conversationId, messageId: message.id, type: message.type, waitedMs: pacing.waited, reason: pacing.reason }));
         // Remarketing con columna «al enviar» configurada: mueve el lead (nunca frena el envío).
         if (message.remarketing_campaign_id) {
           try { await require('./services/remarketing-move.service').afterSent(message.id); }
