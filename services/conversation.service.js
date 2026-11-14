@@ -235,6 +235,20 @@ exports.setAutoReply = async (organizationId, conversationId, input) => {
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   return result.rows[0];
 };
+const productImagesSchema = z.object({
+  products: z.array(z.object({
+    productId: z.number().int().positive(),
+    mediaId: z.string().trim().min(1).max(256).optional(),
+    caption: z.string().max(800).optional(),
+  })).min(1).max(10),
+});
+/** Imágenes de productos con «Tallas disponibles: …» calculadas con el inventario actual. */
+exports.queueProductImages = async (organizationId, conversationId, input) => {
+  const { products } = validation(productImagesSchema, input);
+  const exists = await db.query('SELECT 1 FROM conversations WHERE id=$1 AND organization_id=$2', [conversationId, organizationId]);
+  if (!exists.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  return require('./product-stock.service').queue(organizationId, conversationId, products);
+};
 // Paquete con el que el cotizador del chat abre; null lo quita.
 exports.setQuoteBundle = async (organizationId, conversationId, input) => {
   const { bundle } = validation(quoteBundleSchema, input);

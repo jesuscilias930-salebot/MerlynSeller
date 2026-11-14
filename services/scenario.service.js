@@ -74,6 +74,20 @@ const stepSchema = z.object({
     )
     .max(20)
     .optional(),
+  // send_media: imágenes de productos con sus tallas disponibles al momento de enviar.
+  products: z
+    .array(
+      z.object({
+        productId: z.number().int().positive(),
+        // Imagen propia; sin ella se usa la foto del producto en el E-commerce.
+        mediaId: z.string().trim().min(1).max(256).optional(),
+        caption: z.string().max(800).optional(),
+        // Nombre que se muestra en el editor (modelo · color · género).
+        label: z.string().max(200).optional(),
+      }),
+    )
+    .max(20)
+    .optional(),
   // send_media: conjuntos de Documentos → Conjuntos reutilizables; se envían sus fotos actuales.
   packageIds: z.array(z.string().uuid()).max(10).optional(),
   branches: z.array(branchSchema).max(20).optional(),
@@ -138,10 +152,10 @@ const scenarioSchema = z
           code: "custom",
           message: `Paso ${index + 1} (${step.label}): agrega al menos una opción`,
         });
-      if (step.type === "send_media" && !step.items?.length && !step.packageIds?.length)
+      if (step.type === "send_media" && !step.items?.length && !step.packageIds?.length && !step.products?.length)
         ctx.addIssue({
           code: "custom",
-          message: `Paso ${index + 1} (${step.label}): agrega al menos un archivo o conjunto`,
+          message: `Paso ${index + 1} (${step.label}): agrega al menos un archivo, conjunto o producto`,
         });
       if (step.type === "budget_recommendation" && !step.budgetOptions?.length)
         ctx.addIssue({
@@ -805,6 +819,15 @@ const run = async (
           item.caption,
         );
     }
+  // Las agotadas o sin foto se omiten: el cliente solo ve lo que sí hay.
+  if (step.type === "send_media" && step.products?.length) {
+    try {
+      const result = await require("./product-stock.service").queue(organizationId, conversationId, step.products);
+      if (result.skipped.length) log("info", "Scenario product images skipped", { scenario: scenario.key, step: step.id, skipped: result.skipped.length });
+    } catch (error) {
+      log("warn", "Scenario product images could not be sent", { scenario: scenario.key, step: step.id, error: error.message });
+    }
+  }
   if (step.type === "move_column" && step.columnId)
     await db.query(
       // Un lead fijado por una regla de columna se queda donde está.
