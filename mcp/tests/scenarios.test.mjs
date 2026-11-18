@@ -39,3 +39,22 @@ test('scenario client restricts backend, routes, PUT method and never retries', 
   const wrong = createScenarioClient({ origin, loadSession: async () => ({ origin: 'https://other.com', token }), fetchImpl: async () => { count++; } });
   await assert.rejects(wrong('/mcp/scenarios'), /Sesión/); assert.equal(count, 1);
 });
+
+test('the connector keeps sets, products with sizes and the quote bundle', async () => {
+  const calls = [];
+  const server = buildScenarioServer(async (path, body) => { calls.push({ path, body }); return { ok: true }; });
+  const client = new Client({ name: 'test', version: '1' });
+  const [a,b] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(a), client.connect(b)]);
+  const definition = { name: 'Modelos', triggerExamples: ['que modelos tienes'], quoteBundle: { id: '8', name: 'Caricatura 100 pares' }, steps: [
+    { id: 'fotos', type: 'send_media', label: 'Modelos', packageIds: ['33333333-3333-4333-8333-333333333333'], products: [{ productId: 3, caption: 'Nuevo', label: 'Caricatura niña' }], nextStepId: 'fin' },
+    { id: 'fin', type: 'end', label: 'Fin' },
+  ] };
+  try {
+    await client.callTool({ name: 'validar_escenario', arguments: { definition } });
+    const sent = calls[0].body;
+    assert.deepEqual(sent.quoteBundle, { id: '8', name: 'Caricatura 100 pares' });
+    assert.deepEqual(sent.steps[0].packageIds, ['33333333-3333-4333-8333-333333333333']);
+    assert.deepEqual(sent.steps[0].products, [{ productId: 3, caption: 'Nuevo', label: 'Caricatura niña' }]);
+  } finally { await client.close(); await server.close(); }
+});

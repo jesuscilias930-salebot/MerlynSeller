@@ -31,7 +31,24 @@ exports.fetchStock = async ({ force = false, fetcher = fetch, now = Date.now() }
   cache = { at: now, items };
   return items;
 };
-exports.clearCache = () => { cache = null; };
+exports.clearCache = () => { cache = null; bundleCache = null; };
+
+let bundleCache = null;
+/** Bundles de la tienda (id y nombre) para el «paquete para cotizar» de los escenarios. */
+exports.fetchBundles = async ({ fetcher = fetch, now = Date.now() } = {}) => {
+  if (bundleCache && now - bundleCache.at < CACHE_MS) return bundleCache.items;
+  const secret = process.env.STORE_SHIPPING_SECRET || '';
+  if (secret.length < 32) throw fail(503, 'Configura STORE_SHIPPING_SECRET para consultar los bundles');
+  let response;
+  try {
+    response = await fetcher(new URL('/internal/crm/bundles', controlUrl()), { headers: { 'X-Store-Shipping-Secret': secret }, signal: AbortSignal.timeout(10000) });
+  } catch { throw fail(503, 'No se pudieron consultar los bundles en SockControl'); }
+  if (!response.ok) throw fail(503, `SockControl no entregó los bundles (${response.status})`);
+  const items = await response.json();
+  if (!Array.isArray(items)) throw fail(503, 'Respuesta de bundles inválida');
+  bundleCache = { at: now, items: items.map((item) => ({ id: String(item.id), name: String(item.name || '') })).filter((item) => item.name) };
+  return bundleCache.items;
+};
 
 /** Solo la organización de la tienda comparte inventario con SockControl. */
 const requireStoreOrganization = (organizationId) => {

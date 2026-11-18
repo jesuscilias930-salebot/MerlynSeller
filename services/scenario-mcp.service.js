@@ -4,7 +4,9 @@ const db = require('../lib/db');
 const scenarios = require('./scenario.service');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
-const projection = 'id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,updated_at AS "updatedAt"';
+// Igual que scenario.service.list (mismas columnas, orden y normalización): la revisión debe coincidir.
+const projection = 'id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",updated_at AS "updatedAt"';
+const normalized = row => row && ({ ...row, triggerExamples: row.triggerExamples || [], steps: row.steps || [], quoteBundle: row.quoteBundle || null });
 const revision = row => hash(JSON.stringify(row));
 
 exports.issue = async auth => {
@@ -38,7 +40,21 @@ exports.context = async (organizationId, client = db) => {
   const scenarioMedia = [...new Map(saved.rows.flatMap(row => (row.steps || []).flatMap(step =>
     [...(step.items || []), ...(step.budgetOptions || []).flatMap(option => option.items || [])]
   )).map(item => [item.mediaId, item])).values()];
-  return { columns: columns.rows, packages: packages.rows, documents: documents.rows, scenarioMedia };
+  // Inventario de la tienda (SockControl): si no responde, el resto de recursos sigue disponible.
+  const productStock = require('./product-stock.service');
+  const [catalog, bundles] = await Promise.all([
+    productStock.catalog(organizationId).then(rows => ({ rows }), error => ({ error: error.message })),
+    productStock.fetchBundles().then(rows => ({ rows }), error => ({ error: error.message })),
+  ]);
+  return {
+    columns: columns.rows, packages: packages.rows, documents: documents.rows, scenarioMedia,
+    // Para pasos send_media → products: una entrada por modelo · color · género con sus tallas disponibles hoy.
+    productsWithSizes: catalog.rows ? catalog.rows.map(row => ({ productId: row.productId, title: row.title, category: row.category, availableSizes: row.sizes, hasStorePhoto: row.photos.length > 0 })) : [],
+    ...(catalog.error ? { productsWithSizesError: catalog.error } : {}),
+    // Para quoteBundle del escenario: bundles de la tienda (id numérico de SockControl en texto).
+    quoteBundles: bundles.rows || [],
+    ...(bundles.error ? { quoteBundlesError: bundles.error } : {}),
+  };
 };
 exports.validate = async (organizationId, input, client = db) => {
   // Same parser as the visual editor; validation never runs the scenario.
@@ -58,13 +74,23 @@ exports.validate = async (organizationId, input, client = db) => {
     if (!reachable.has(step.id)) fail(400, `El paso ${step.label} no está conectado al inicio`);
     if (step.type === 'move_column' && !columns.has(step.columnId)) fail(400, 'Selecciona una columna existente de tu negocio');
     if (step.type === 'send_catalog' && !context.documents.some(row => row.isCatalog)) fail(400, 'Configura el catálogo del negocio antes de usar este paso');
-    if (step.type === 'send_media' && !step.items?.length && !step.packageIds?.length) fail(400, 'El paso de fotografías/documentos necesita archivos o un conjunto');
+    if (step.type === 'send_media' && !step.items?.length && !step.packageIds?.length && !step.products?.length) fail(400, 'El paso de fotografías/documentos necesita archivos, un conjunto o productos');
+    if (step.products?.length) {
+      if (context.productsWithSizesError) fail(503, `No se pudieron verificar los productos: ${context.productsWithSizesError}`);
+      const known = new Set(context.productsWithSizes.map(row => row.productId));
+      for (const product of step.products) if (!known.has(product.productId)) fail(400, `El producto ${product.productId} no existe en el inventario; usa un productId de productsWithSizes`);
+      for (const product of step.products) if (product.mediaId && !media.has(product.mediaId)) fail(400, 'La imagen propia del producto no pertenece a los recursos disponibles de tu negocio');
+    }
     for (const id of step.packageIds || []) if (!packages.has(id)) fail(400, 'El conjunto de imágenes no pertenece a tu negocio');
     for (const item of [...(step.items || []), ...(step.budgetOptions || []).flatMap(option => option.items || [])])
       if (!media.has(item.mediaId)) fail(400, 'El archivo no pertenece a los recursos disponibles de tu negocio');
     for (const option of step.budgetOptions || [])
       for (const id of option.packageIds || []) if (!packages.has(id)) fail(400, 'El paquete recomendado no pertenece a tu negocio');
     if (!['end', 'wait_reply', 'send_options'].includes(step.type) && !step.nextStepId) fail(400, `Conecta el siguiente paso de ${step.label}`);
+  }
+  if (definition.quoteBundle) {
+    if (context.quoteBundlesError) fail(503, `No se pudo verificar el paquete para cotizar: ${context.quoteBundlesError}`);
+    if (!context.quoteBundles.some(row => row.id === definition.quoteBundle.id)) fail(400, 'El paquete para cotizar no existe en la tienda; usa uno de quoteBundles');
   }
   // Automatic-only cycles would send repeated messages. Loops that wait for a reply are allowed.
   const visiting = new Set(), done = new Set();
@@ -83,16 +109,19 @@ exports.save = async (organizationId, input) => {
   const { id, expectedRevision } = shape.data;
   return db.transaction(async client => {
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`scenario-mcp:${organizationId}:${id}`]);
-    const current = (await client.query(`SELECT ${projection} FROM automation_scenarios WHERE id=$1 AND organization_id=$2 FOR UPDATE`, [id, organizationId])).rows[0];
+    const current = normalized((await client.query(`SELECT ${projection} FROM automation_scenarios WHERE id=$1 AND organization_id=$2 FOR UPDATE`, [id, organizationId])).rows[0]);
     const definition = await exports.validate(organizationId, shape.data.definition, client);
-    if (current && JSON.stringify(editable(current)) === JSON.stringify(definition)) return { ...current, revision: revision(current) };
+    // Sin quoteBundle en la definición se conserva el actual, así que no cuenta como cambio.
+    const comparable = { ...definition, ...(definition.quoteBundle === undefined && current ? { quoteBundle: editable(current).quoteBundle } : {}) };
+    if (current && JSON.stringify(editable(current)) === JSON.stringify(comparable)) return { ...current, revision: revision(current) };
     if (current && (!expectedRevision || revision(current) !== expectedRevision)) fail(409, 'El escenario cambió. Consulta su versión actual antes de guardarlo');
     if (!current && expectedRevision) fail(404, 'Escenario no encontrado en tu negocio');
-    const values = [id, organizationId, definition.name, definition.isActive, JSON.stringify(definition.triggerExamples), definition.aiDescription || null, definition.priority, definition.canInterrupt, JSON.stringify(definition.steps)];
+    // quoteBundle ausente conserva el paquete configurado; null lo quita.
+    const values = [id, organizationId, definition.name, definition.isActive, JSON.stringify(definition.triggerExamples), definition.aiDescription || null, definition.priority, definition.canInterrupt, JSON.stringify(definition.steps), definition.quoteBundle !== undefined, JSON.stringify(definition.quoteBundle || null)];
     const sql = current
-      ? `UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING ${projection}`
-      : `INSERT INTO automation_scenarios (id,organization_id,name,is_active,trigger_examples,ai_description,priority,can_interrupt,steps,key,position,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'mcp_'||$1::text,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$2),0),'{}') RETURNING ${projection}`;
-    const row = (await client.query(sql, values)).rows[0];
+      ? `UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=CASE WHEN $10::boolean THEN COALESCE(config,'{}'::jsonb) || jsonb_build_object('quoteBundle',$11::jsonb) ELSE config END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING ${projection}`
+      : `INSERT INTO automation_scenarios (id,organization_id,name,is_active,trigger_examples,ai_description,priority,can_interrupt,steps,key,position,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'mcp_'||($1::uuid)::text,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$2),0),CASE WHEN $10::boolean THEN jsonb_build_object('quoteBundle',$11::jsonb) ELSE '{}'::jsonb END) RETURNING ${projection}`;
+    const row = normalized((await client.query(sql, values)).rows[0]);
     return { ...row, revision: revision(row) };
   });
 };

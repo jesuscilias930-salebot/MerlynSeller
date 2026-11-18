@@ -61,3 +61,30 @@ test('el paso de fotografías acepta conjuntos reutilizables del negocio', async
   assert.throws(() => scenarios.parseDefinition(draft([{ ...step, packageIds: [] }, end])), /archivo, conjunto o producto/);
   await assert.rejects(service.validate('org-1', draft([step, end]), { query: resources }), /conjunto de imágenes no pertenece/);
 });
+
+test('la revisión de listar coincide con la de guardar y el paquete para cotizar se conserva', async () => {
+  const scenarios = require('../services/scenario.service');
+  const originalQuery = db.query, originalTransaction = db.transaction;
+  const id = '11111111-1111-4111-8111-111111111111';
+  const row = { id, key: 'k', name: 'Prueba', isActive: false, triggerExamples: ['hola'], aiDescription: null, priority: 0, canInterrupt: true, position: 0, steps: [end], quoteBundle: { id: '8', name: 'P100' }, updatedAt: '2026-11-17' };
+  const writes = [];
+  try {
+    db.query = async (sql) => (sql.includes('FROM automation_scenarios') ? { rows: [row] } : { rows: [] });
+    const [listed] = await service.list('org-1');
+    db.transaction = async fn => fn({ query: async (sql, args) => {
+      if (sql.includes('advisory')) return { rows: [] };
+      if (sql.includes('FOR UPDATE')) return { rows: [{ ...row }] };
+      if (/^UPDATE/.test(sql)) { writes.push(args); return { rows: [{ ...row, name: args[2], quoteBundle: args[9] ? JSON.parse(args[10]) : row.quoteBundle }] }; }
+      return resources(sql, args);
+    } });
+    // Editar sin quoteBundle: la revisión de listar se acepta y el paquete no se toca.
+    const saved = await service.save('org-1', { id, expectedRevision: listed.revision, definition: { name: 'Cambio', triggerExamples: ['hola'], steps: [end] } });
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0][9], false, 'sin quoteBundle no cambia config');
+    assert.deepEqual(saved.quoteBundle, { id: '8', name: 'P100' });
+    // Reintento idéntico (sin quoteBundle) no vuelve a escribir.
+    await service.save('org-1', { id, expectedRevision: listed.revision, definition: { name: 'Prueba', triggerExamples: ['hola'], steps: [end] } });
+    assert.equal(writes.length, 1);
+    assert.ok(scenarios.list);
+  } finally { db.query = originalQuery; db.transaction = originalTransaction; }
+});
