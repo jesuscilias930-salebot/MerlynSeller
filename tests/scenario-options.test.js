@@ -322,3 +322,30 @@ test('un paso de medios puede enviar videos', async () => {
     assert.deepEqual(queued, [['video', 'vid1', 'Mira el producto'], ['image', 'img1', undefined]]);
   } finally { db.query = original.query; conversations.queueExistingMedia = original.existing; scenarios.list = original.list; }
 });
+
+test('el mensaje del anuncio con cantidad inicia su escenario en vez de escalar', async () => {
+  const automations = require('../services/automation.service');
+  const leads = require('../services/lead.service');
+  const caja = scenarios.parseDefinition({
+    name: 'CE120 · Quiero la caja', triggerExamples: ['Hola, quiero la Caja Emprendedora de 120 pares', 'Quiero la caja de 120 pares'],
+    steps: [{ id: 'generos', type: 'send_text', label: 'Géneros', body: '¿Qué géneros te gustaría?', nextStepId: 'fin' }, { id: 'fin', type: 'end', label: 'Fin' }],
+  });
+  const original = { query: db.query, queueText: conversations.queueText, attention: leads.moveToAttention };
+  const sent = []; let escalated = 0;
+  db.query = async (sql) => {
+    if (sql.includes('auto_reply_enabled')) return { rows: [{ auto_reply_enabled: true }] };
+    if (sql.includes('scenario_enabled FROM conversations')) return { rows: [{ scenario_enabled: true }] };
+    if (sql.includes('FROM automation_scenarios')) return { rows: [{ id: 's1', key: 'caja', isActive: true, ...caja, position: 0 }] };
+    return { rows: [] };
+  };
+  conversations.queueText = async (_org, _conv, message) => { sent.push(message.body); return { id: 'm' }; };
+  leads.moveToAttention = async () => { escalated += 1; return true; };
+  try {
+    await automations.processIncoming('org', 'conv', { id: 'm.1', type: 'text', text: { body: 'Hola, quiero la Caja Emprendedora de 120 pares' } });
+    assert.deepEqual(sent, ['¿Qué géneros te gustaría?']);
+    assert.equal(escalated, 0);
+    await automations.processIncoming('org', 'conv', { id: 'm.2', type: 'text', text: { body: 'Necesito 300 pares de dama' } });
+    assert.equal(sent.length, 1, 'una cotización con cantidad sin escenario sigue yendo con una persona');
+    assert.equal(escalated, 1);
+  } finally { db.query = original.query; conversations.queueText = original.queueText; leads.moveToAttention = original.attention; }
+});

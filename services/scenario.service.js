@@ -875,6 +875,9 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
   // catálogo»), gana la frase más específica y no el que está más arriba en la lista.
   const rankedStarts = active.map((scenario) => ({ scenario, value: score(text, scenario.triggerExamples), specific: specificity(text, scenario.triggerExamples) })).sort((a, b) => b.value - a.value || b.specific - a.specific || a.scenario.position - b.scenario.position || b.scenario.priority - a.scenario.priority);
   let newStart = rankedStarts[0]?.value >= 0.72 ? rankedStarts[0].scenario : null;
+  // rulesOnly: solo inicia un escenario cuando el texto coincide con sus frases (sin IA ni pasos
+  // en curso). Lo usa la escalación de cotizaciones con cantidad, p. ej. «quiero la caja de 120 pares».
+  if (options.rulesOnly && !newStart) return { handled: false, requiresHuman: false };
   if (!newStart) newStart = await aiMatchScenario(text, active);
 
   let state = states.rows[0];

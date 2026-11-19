@@ -207,6 +207,10 @@ exports.processIncoming = async (organizationId, conversationId, message, option
   const shippingQuestion = isShippingQuestion(text);
   const active = intents.filter((intent) => intent.isActive);
   if (!optionReply && isSpecificQuoteRequest(text)) {
+    // Un escenario cuya frase de inicio incluye la cantidad (p. ej. el mensaje prellenado de un
+    // anuncio «Quiero la Caja Emprendedora de 120 pares») responde antes de escalar.
+    scenarioResult = await scenarios.processIncoming(organizationId, conversationId, text, { rulesOnly: true });
+    if (scenarioResult.handled) return;
     const moved = await leads.moveToAttention(organizationId, conversationId);
     log('info', 'Specific quote request escalated to human attention', { conversationId, movedToAttention: moved });
     return;
