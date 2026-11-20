@@ -288,8 +288,9 @@ exports.entrepreneurPackageImageMedia = async (req, res, next) => {
   try {
     const result = await db.query(`SELECT image.media_id FROM entrepreneur_package_images image JOIN entrepreneur_packages p ON p.id=image.package_id WHERE image.id=$1 AND p.organization_id=$2`, [req.params.imageId, req.auth.organizationId]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Image not found' });
+    // Cada imagen guardada tiene un archivo fijo: el navegador la reutiliza un día sin volver a pedirla.
     const media = await messageService.downloadMedia(result.rows[0].media_id);
-    res.set({ 'Content-Type': media.contentType, 'Cache-Control': 'private, max-age=300' });
+    res.set({ 'Content-Type': media.contentType, 'Cache-Control': 'private, max-age=86400, immutable' });
     return res.send(media.buffer);
   } catch (error) { return next(error); }
 };
@@ -314,7 +315,7 @@ exports.deleteSticker = async (req, res, next) => {
   catch (error) { return next(error); }
 };
 exports.stickerMedia = async (req, res, next) => {
-  try { const result = await db.query('SELECT media_id FROM saved_stickers WHERE id=$1 AND organization_id=$2', [req.params.id, req.auth.organizationId]); if (!result.rows[0]) return res.status(404).json({ error: 'Sticker not found' }); const media = await messageService.downloadMedia(result.rows[0].media_id); res.set({ 'Content-Type': media.contentType, 'Cache-Control': 'private, max-age=300' }); return res.send(media.buffer); }
+  try { const result = await db.query('SELECT media_id FROM saved_stickers WHERE id=$1 AND organization_id=$2', [req.params.id, req.auth.organizationId]); if (!result.rows[0]) return res.status(404).json({ error: 'Sticker not found' }); const media = await messageService.downloadMedia(result.rows[0].media_id); res.set({ 'Content-Type': media.contentType, 'Cache-Control': 'private, max-age=86400, immutable' }); return res.send(media.buffer); }
   catch (error) { return next(error); }
 };
 
