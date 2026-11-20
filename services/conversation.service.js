@@ -391,7 +391,9 @@ exports.queueAudio = async (organizationId, conversationId, input) => {
 
 exports.queueMedia = async (organizationId, conversationId, type, input) => {
   input.videoLog?.('conversion_started');
-  const media = type === 'video' ? await messageService.prepareVideo(input) : input;
+  const media = type === 'video' ? await messageService.prepareVideo(input)
+    : type === 'image' ? await require('./image-compression').fitWhatsAppImage(input)
+    : input;
   input.videoLog?.('conversion_completed', { bytes: media.buffer.length });
   const uploaded = await messageService.uploadMedia(media);
   input.videoLog?.('meta_upload_completed');
