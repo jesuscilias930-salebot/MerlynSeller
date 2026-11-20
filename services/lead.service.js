@@ -4,7 +4,10 @@ const realtime = require('../lib/realtime');
 
 const columnSchema = z.object({ name: z.string().trim().min(2).max(80), boardId: z.string().uuid().optional() });
 const moveSchema = z.object({ columnId: z.string().uuid() });
-const bulkMoveSchema = z.object({ targetColumnId: z.string().uuid() });
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Usa fechas con formato AAAA-MM-DD').refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)), 'Fecha inválida');
+// from/to (opcionales, inclusive): solo los leads cuyo último mensaje cae en ese rango, en la zona del negocio.
+const bulkMoveSchema = z.object({ targetColumnId: z.string().uuid(), from: isoDate.optional().nullable(), to: isoDate.optional().nullable() })
+  .refine((value) => !value.from || !value.to || value.from <= value.to, { message: 'La fecha inicial no puede ser posterior a la final', path: ['from'] });
 const reorderSchema = z.object({ columnIds: z.array(z.string().uuid()).min(1).max(100) });
 
 const validate = (schema, value) => {
@@ -244,6 +247,7 @@ exports.moveAllFromColumn = async (organizationId, sourceColumnId, input) => {
     error.status = 400;
     throw error;
   }
+  const timezone = data.from || data.to ? (await require('./business-hours.service').get(organizationId)).timezone || 'America/Mexico_City' : 'America/Mexico_City';
   const movedLeads = await db.transaction(async (client) => {
     const columns = await client.query(
       'SELECT id FROM lead_columns WHERE organization_id=$1 AND id = ANY($2::uuid[]) FOR UPDATE',
@@ -254,16 +258,21 @@ exports.moveAllFromColumn = async (organizationId, sourceColumnId, input) => {
       error.status = 404;
       throw error;
     }
+    // Fecha del chat = su último mensaje (enviado o recibido), igual que en la lista; sin mensajes, su última actualización.
     const moved = await client.query(
-      `UPDATE conversations
+      `UPDATE conversations c
        SET lead_column_id=$3, column_pinned_at=NULL, column_pinned_rule_id=NULL, updated_at=now()
-       WHERE organization_id=$1 AND lead_column_id=$2`,
-      [organizationId, sourceColumnId, data.targetColumnId],
+       FROM (SELECT conversation.id, COALESCE((SELECT max(m.created_at) FROM messages m WHERE m.conversation_id = conversation.id), conversation.updated_at) AS chat_at
+             FROM conversations conversation WHERE conversation.organization_id=$1 AND conversation.lead_column_id=$2) source
+       WHERE c.id = source.id
+         AND ($4::date IS NULL OR source.chat_at >= ($4::date)::timestamp AT TIME ZONE $6)
+         AND ($5::date IS NULL OR source.chat_at < ($5::date + 1)::timestamp AT TIME ZONE $6)`,
+      [organizationId, sourceColumnId, data.targetColumnId, data.from || null, data.to || null, timezone],
     );
     return moved.rowCount;
   });
   await realtime.publish(organizationId, 'lead.bulk_moved');
-  return { sourceColumnId, targetColumnId: data.targetColumnId, movedLeads };
+  return { sourceColumnId, targetColumnId: data.targetColumnId, movedLeads, from: data.from || null, to: data.to || null };
 };
 
 // An unmatched customer message should be visible to a human. The column is
