@@ -294,6 +294,25 @@ exports.queueText = async (organizationId, conversationId, input) => {
   return { id: result.rows[0].id, status: 'pending' };
 };
 
+// Ubicación: «saved» = la bodega guardada en Configuración; si no, las coordenadas que manda el
+// navegador (ubicación actual). WhatsApp la recibe como pin; Messenger/Instagram como texto con enlace.
+exports.queueLocation = async (organizationId, conversationId, input = {}) => {
+  const businessLocation = require('./business-location.service');
+  let location;
+  if (input.source === 'saved') {
+    location = await businessLocation.get(organizationId);
+    if (!location) { const error = new Error('Primero guarda la ubicación de la bodega en Configuración.'); error.status = 400; throw error; }
+  } else location = businessLocation.parse(input);
+  const metadata = { location: { latitude: location.latitude, longitude: location.longitude, name: location.name || null, address: location.address || null } };
+  const result = await db.query(
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, message_metadata, status) SELECT $1, id, 'outbound', 'location', $3, $4, 'pending' FROM conversations WHERE id=$2 AND organization_id=$1 RETURNING id",
+    [organizationId, conversationId, businessLocation.messageBody(metadata.location), JSON.stringify(metadata)],
+  );
+  if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  await outboundQueue().add('send-location', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
+  return { id: result.rows[0].id, status: 'pending', type: 'location' };
+};
+
 exports.queueCtaUrl = async (organizationId, conversationId, input) => {
   const data = validation(ctaUrlSchema, input);
   if (!/^https:\/\//i.test(data.url)) { const error = new Error('url must use HTTPS'); error.status = 400; throw error; }

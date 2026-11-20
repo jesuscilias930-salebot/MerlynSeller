@@ -12,7 +12,7 @@ const MAX_MESSAGES_PER_DRAIN = 100;
 const outboundRedis = connection();
 
 const pendingMessage = async (conversationId) => (await db.query(`
-  SELECT m.id, m.type, m.body, m.media_id, m.filename, m.organization_id, m.conversation_id, m.remarketing_campaign_id,
+  SELECT m.id, m.type, m.body, m.media_id, m.filename, m.message_metadata, m.organization_id, m.conversation_id, m.remarketing_campaign_id,
     m.outbound_sequence, c.phone_number, c.channel, c.external_id,
     replied.provider_message_id AS reply_to_provider_message_id,
     (SELECT max(created_at) FROM messages i WHERE i.conversation_id = m.conversation_id AND i.direction = 'inbound') AS last_inbound_at,
@@ -49,6 +49,8 @@ const send = (message) => message.channel && message.channel !== 'whatsapp'
         ? messageService.sendAttachment({ to: message.phone_number, type: 'audio', id: message.media_id })
         : message.type === 'video'
           ? messageService.sendVideo({ to: message.phone_number, id: message.media_id, caption: message.body || undefined })
+          : message.type === 'location'
+            ? messageService.sendLocation({ to: message.phone_number, ...(message.message_metadata?.location || {}) })
           : message.type === 'interactive'
             ? sendInteractive(message)
             : message.type === 'template'

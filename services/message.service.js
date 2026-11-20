@@ -268,6 +268,20 @@ exports.sendText = async (input) => send({
   ...replyContext(input.replyToProviderMessageId),
 });
 
+exports.sendLocation = async (input) => {
+  const latitude = Number(input.latitude), longitude = Number(input.longitude);
+  if (!Number.isFinite(latitude) || Math.abs(latitude) > 90 || !Number.isFinite(longitude) || Math.abs(longitude) > 180) throw new MessageError(400, 'La ubicación no tiene coordenadas válidas');
+  const name = input.name ? optionalText(String(input.name), 'name', 160) : undefined;
+  const address = input.address ? optionalText(String(input.address), 'address', 512) : undefined;
+  return send({
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: recipient(input.to),
+    type: 'location',
+    location: { latitude, longitude, ...(name ? { name } : {}), ...(address ? { address } : {}) },
+  });
+};
+
 exports.sendVideo = async (input) => {
   const caption = optionalText(input.caption, 'caption', 1024);
   const video = {

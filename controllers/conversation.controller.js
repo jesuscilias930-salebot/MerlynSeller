@@ -78,6 +78,10 @@ exports.sendText = async (req, res, next) => {
         return handle(error, res, next); 
     } 
 };
+exports.sendLocation = async (req, res, next) => {
+    try { await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id); return res.status(202).json(await conversations.queueLocation(req.auth.organizationId, req.params.id, req.body)); }
+    catch (error) { return handle(error, res, next); }
+};
 exports.sendCtaUrl = async (req, res, next) => {
     try { await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id); return res.status(202).json(await conversations.queueCtaUrl(req.auth.organizationId, req.params.id, req.body)); }
     catch (error) { return handle(error, res, next); }

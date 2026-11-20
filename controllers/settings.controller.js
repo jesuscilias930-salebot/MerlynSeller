@@ -422,3 +422,19 @@ exports.previewBusinessHours = async (req, res, next) => {
     return res.json(businessHours.evaluate(config, text, at));
   } catch (error) { return hoursError(error, res, next); }
 };
+
+// Ubicación de la bodega para enviarla desde el chat.
+const businessLocation = require('../services/business-location.service');
+const locationError = (error, res, next) => error.status === 400 ? res.status(400).json({ error: error.message }) : next(error);
+exports.getBusinessLocation = async (req, res, next) => {
+  try { return res.json({ location: await businessLocation.get(req.auth.organizationId) }); }
+  catch (error) { return locationError(error, res, next); }
+};
+exports.saveBusinessLocation = async (req, res, next) => {
+  try { return res.json({ location: await businessLocation.save(req.auth.organizationId, req.body) }); }
+  catch (error) { return locationError(error, res, next); }
+};
+exports.deleteBusinessLocation = async (req, res, next) => {
+  try { await businessLocation.remove(req.auth.organizationId); return res.status(204).end(); }
+  catch (error) { return next(error); }
+};

@@ -34,4 +34,7 @@ router.delete('/option-templates/:id', requireUser, requireRole('owner', 'admin'
 router.get('/business-hours', requireUser, controller.getBusinessHours);
 router.put('/business-hours', requireUser, requireRole('owner', 'admin'), controller.saveBusinessHours);
 router.post('/business-hours/preview', requireUser, controller.previewBusinessHours);
+router.get('/business-location', requireUser, controller.getBusinessLocation);
+router.put('/business-location', requireUser, requireRole('owner', 'admin'), controller.saveBusinessLocation);
+router.delete('/business-location', requireUser, requireRole('owner', 'admin'), controller.deleteBusinessLocation);
 module.exports = router;
