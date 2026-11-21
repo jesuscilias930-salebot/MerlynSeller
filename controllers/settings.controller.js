@@ -114,6 +114,7 @@ const entrepreneurPackageSchema = z.object({
   bundleType: z.string().trim().min(1).max(120).nullable().optional(),
   imageCategory: z.string().trim().min(1).max(120).nullable().optional(),
   controlBundleId: z.coerce.number().int().positive().nullable().optional(),
+  chatShortcut: z.boolean().optional(),
 });
 
 const packageResponse = (row) => ({
@@ -125,6 +126,7 @@ const packageResponse = (row) => ({
   bundleType: row.bundle_type,
   imageCategory: row.image_category,
   controlBundleId: row.control_bundle_id,
+  chatShortcut: row.chat_shortcut === true,
   position: row.position,
   created_at: row.created_at,
   updated_at: row.updated_at,
@@ -194,10 +196,10 @@ exports.updateEntrepreneurPackage = async (req, res, next) => {
     const value = parsed.data;
     const result = await db.query(`
       UPDATE entrepreneur_packages
-      SET name=COALESCE($3,name), caption=COALESCE($4,caption), bundle_type=COALESCE($5,bundle_type), control_bundle_id=COALESCE($6,control_bundle_id), image_category=COALESCE($7,image_category), updated_at=now()
+      SET name=COALESCE($3,name), caption=COALESCE($4,caption), bundle_type=COALESCE($5,bundle_type), control_bundle_id=COALESCE($6,control_bundle_id), image_category=COALESCE($7,image_category), chat_shortcut=COALESCE($8,chat_shortcut), updated_at=now()
       WHERE id=$1 AND organization_id=$2
       RETURNING *
-    `, [req.params.id, req.auth.organizationId, value.name, value.caption, value.bundleType, value.controlBundleId, value.imageCategory]);
+    `, [req.params.id, req.auth.organizationId, value.name, value.caption, value.bundleType, value.controlBundleId, value.imageCategory, value.chatShortcut ?? null]);
     if (!result.rows[0]) return res.status(404).json({ error: 'Entrepreneur package not found' });
     return res.json(packageResponse(result.rows[0]));
   } catch (error) { return next(error); }
