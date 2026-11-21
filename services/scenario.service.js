@@ -380,6 +380,44 @@ exports.reorder = async (organizationId, input) => {
   });
   return { scenarioIds: ids.data };
 };
+// Clonar: copia exacta (pasos, frases, archivos, paquete para cotizar) que se crea PAUSADA para
+// editarla sin que responda a clientes, y queda justo debajo del original en la lista.
+const copyName = (name, taken) => {
+  const base = String(name).replace(/\s+\(copia(?: \d+)?\)$/i, "");
+  for (let number = 1; number < 1000; number += 1) {
+    const suffix = number === 1 ? " (copia)" : ` (copia ${number})`;
+    const candidate = `${base.slice(0, 100 - suffix.length).trimEnd()}${suffix}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return `${base.slice(0, 80)} (copia ${Date.now()})`;
+};
+exports.copyName = copyName;
+
+exports.duplicate = async (organizationId, id) => {
+  const all = await exports.list(organizationId);
+  const source = all.find((scenario) => scenario.id === id);
+  if (!source) {
+    const error = new Error("Escenario no encontrado");
+    error.status = 404;
+    throw error;
+  }
+  const created = await exports.create(organizationId, {
+    name: copyName(source.name, new Set(all.map((scenario) => scenario.name.toLowerCase()))),
+    isActive: false,
+    triggerExamples: source.triggerExamples,
+    aiDescription: source.aiDescription || undefined,
+    priority: source.priority,
+    canInterrupt: source.canInterrupt,
+    steps: source.steps,
+    quoteBundle: source.quoteBundle || null,
+  });
+  const order = all.map((scenario) => scenario.id);
+  order.splice(order.indexOf(source.id) + 1, 0, created.id);
+  await exports.reorder(organizationId, { scenarioIds: order });
+  log("info", "Conversation scenario duplicated", { from: source.key, to: created.key });
+  return { ...created, position: order.indexOf(created.id) };
+};
+
 exports.remove = async (organizationId, id) =>
   db.transaction(async (client) => {
     const scenario = await client.query(

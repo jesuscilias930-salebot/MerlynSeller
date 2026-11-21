@@ -16,6 +16,7 @@ router.post('/evidence/upload', require('express').raw({ type: isScenarioFile, l
 router.post('/evidence/upload-video', require('../middleware/video-upload.middleware').videoUpload(controller.uploadEvidenceVideo));
 router.post('/', controller.create);
 router.put('/order', controller.reorder);
+router.post('/:id/duplicate', controller.duplicate);
 router.put('/:id', controller.update);
 router.delete('/:id', controller.remove);
 module.exports = router;
