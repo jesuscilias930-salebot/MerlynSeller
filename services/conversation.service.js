@@ -89,6 +89,7 @@ exports.messages = async (organizationId, conversationId, userId) => (await db.q
   SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename, m.status, m.error_code, m.provider_message_id, m.referral, m.message_metadata AS "messageMetadata", m.created_at,
     (m.deleted_at IS NOT NULL) AS "deletedForEveryone",
     m.reply_to_message_id AS "replyToMessageId", replied.body AS "replyToBody", replied.type AS "replyToType", replied.direction AS "replyToDirection",
+    (replied.media_id IS NOT NULL AND replied.deleted_at IS NULL) AS "replyToHasMedia", replied.filename AS "replyToFilename",
     COALESCE((
       SELECT json_agg(json_build_object('emoji', reaction.emoji, 'actorDirection', reaction.actor_direction) ORDER BY reaction.created_at)
       FROM message_reactions reaction
