@@ -398,6 +398,8 @@ exports.queueMedia = async (organizationId, conversationId, type, input) => {
   input.videoLog?.('conversion_completed', { bytes: media.buffer.length });
   const uploaded = await messageService.uploadMedia(media);
   input.videoLog?.('meta_upload_completed');
+  // La próxima vez que se mande este mismo video (misma huella) se reutiliza sin subir ni convertir.
+  if (type === 'video' && input.sha256) await require('./video-reuse.service').remember(organizationId, input.sha256, uploaded.mediaId, media.buffer.length).catch((error) => console.error(JSON.stringify({ level: 'warn', message: 'Video cache save failed', errorMessage: error.message })));
   const result = await db.query(
     "INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status) SELECT $1, id, 'outbound', $3, $4, $5, 'pending' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
     [organizationId, conversationId, type, input.caption || null, uploaded.mediaId],

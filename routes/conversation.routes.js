@@ -35,5 +35,7 @@ router.post('/:id/messages/document/upload', require('express').raw({ type: isPd
 router.post('/:id/messages/audio', require('express').raw({ type: isAudio, limit: '16mb' }), controller.sendAudio);
 // Hasta 20 MB: las que pasan de 5 MB se reducen a JPEG para que WhatsApp las acepte.
 router.post('/:id/messages/image', require('express').raw({ type: isImage, limit: '20mb' }), controller.sendImage);
+router.post('/:id/messages/video/cached', controller.sendCachedVideo);
+router.post('/:id/messages/saved-video', controller.sendSavedVideo);
 router.post('/:id/messages/video', videoUpload(controller.sendVideo));
 module.exports = router;

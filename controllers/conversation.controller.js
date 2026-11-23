@@ -82,6 +82,18 @@ exports.sendLocation = async (req, res, next) => {
     try { await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id); return res.status(202).json(await conversations.queueLocation(req.auth.organizationId, req.params.id, req.body)); }
     catch (error) { return handle(error, res, next); }
 };
+// Mismo video enviado antes: se reutiliza sin subirlo. 200 { cached: false } si hay que subirlo.
+exports.sendCachedVideo = async (req, res, next) => {
+    try {
+        const result = await require('../services/video-reuse.service').queueCached(req.auth.organizationId, req.params.id, req.body);
+        if (result.cached) await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id);
+        return res.status(result.cached ? 202 : 200).json(result);
+    } catch (error) { return handle(error, res, next); }
+};
+exports.sendSavedVideo = async (req, res, next) => {
+    try { await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id); return res.status(202).json(await require('../services/video-reuse.service').queueSaved(req.auth.organizationId, req.params.id, req.body)); }
+    catch (error) { return handle(error, res, next); }
+};
 exports.sendCtaUrl = async (req, res, next) => {
     try { await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id); return res.status(202).json(await conversations.queueCtaUrl(req.auth.organizationId, req.params.id, req.body)); }
     catch (error) { return handle(error, res, next); }
@@ -147,6 +159,7 @@ const sendMedia = (type) => async (req, res, next) => {
             contentType,
             filename,
             caption: caption || undefined,
+            sha256: type === 'video' ? req.get('x-content-sha256') || undefined : undefined,
         }));
     } catch (error) { return handle(error, res, next); }
 };

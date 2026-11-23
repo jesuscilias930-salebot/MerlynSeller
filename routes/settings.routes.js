@@ -37,4 +37,10 @@ router.post('/business-hours/preview', requireUser, controller.previewBusinessHo
 router.get('/business-location', requireUser, controller.getBusinessLocation);
 router.put('/business-location', requireUser, requireRole('owner', 'admin'), controller.saveBusinessLocation);
 router.delete('/business-location', requireUser, requireRole('owner', 'admin'), controller.deleteBusinessLocation);
+const { videoUpload } = require('../middleware/video-upload.middleware');
+router.get('/saved-videos', requireUser, controller.listSavedVideos);
+router.get('/saved-videos/:id/media', requireUser, controller.savedVideoMedia);
+router.post('/saved-videos/upload', requireUser, requireRole('owner', 'admin'), videoUpload(controller.uploadSavedVideo));
+router.patch('/saved-videos/:id', requireUser, requireRole('owner', 'admin'), controller.updateSavedVideo);
+router.delete('/saved-videos/:id', requireUser, requireRole('owner', 'admin'), controller.deleteSavedVideo);
 module.exports = router;

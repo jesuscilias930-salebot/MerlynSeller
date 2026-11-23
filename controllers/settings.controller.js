@@ -441,3 +441,33 @@ exports.deleteBusinessLocation = async (req, res, next) => {
   try { await businessLocation.remove(req.auth.organizationId); return res.status(204).end(); }
   catch (error) { return next(error); }
 };
+
+// Videos guardados: se suben una vez y se envían con un clic.
+const savedVideos = require('../services/video-reuse.service');
+const videoError = (error, res, next) => (error.status ? res.status(error.status).json({ error: error.message }) : next(error));
+exports.listSavedVideos = async (req, res, next) => { try { return res.json(await savedVideos.list(req.auth.organizationId)); } catch (error) { return videoError(error, res, next); } };
+exports.uploadSavedVideo = async (req, res, next) => {
+  try {
+    const contentType = (req.get('content-type') || '').split(';')[0].toLowerCase();
+    const filename = decodeURIComponent(req.get('x-upload-filename') || 'video.mp4');
+    const name = decodeURIComponent(req.get('x-video-name') || filename.replace(/\.[^.]+$/, ''));
+    return res.status(201).json(await savedVideos.create(req.auth.organizationId, { name, contentType, filename, videoUploadPath: req.videoUploadPath }));
+  } catch (error) { return videoError(error, res, next); }
+};
+exports.updateSavedVideo = async (req, res, next) => { try { return res.json(await savedVideos.update(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return videoError(error, res, next); } };
+exports.deleteSavedVideo = async (req, res, next) => { try { await savedVideos.remove(req.auth.organizationId, req.params.id); return res.status(204).end(); } catch (error) { return videoError(error, res, next); } };
+exports.savedVideoMedia = async (req, res, next) => {
+  try {
+    const file = await savedVideos.file(req.auth.organizationId, req.params.id);
+    // Admite «Range» para que el reproductor del navegador pueda adelantar el video.
+    const range = /^bytes=(\d*)-(\d*)$/.exec(req.get('range') || '');
+    res.set({ 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=86400' });
+    if (range && (range[1] || range[2])) {
+      const start = range[1] ? Number(range[1]) : Math.max(0, file.length - Number(range[2]));
+      const end = range[1] && range[2] ? Math.min(Number(range[2]), file.length - 1) : file.length - 1;
+      if (start >= file.length || start > end) return res.status(416).set('Content-Range', `bytes */${file.length}`).end();
+      return res.status(206).set('Content-Range', `bytes ${start}-${end}/${file.length}`).send(file.subarray(start, end + 1));
+    }
+    return res.send(file);
+  } catch (error) { return videoError(error, res, next); }
+};
