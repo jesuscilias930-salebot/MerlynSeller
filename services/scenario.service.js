@@ -90,6 +90,19 @@ const stepSchema = z.object({
     .optional(),
   // send_media: conjuntos de Documentos → Conjuntos reutilizables; se envían sus fotos actuales.
   packageIds: z.array(z.string().uuid()).max(10).optional(),
+  // send_media: videos de «Videos guardados» (se suben una vez; si su archivo de Meta vence, se vuelve a subir).
+  // caption opcional = mensaje que acompaña al video.
+  savedVideos: z
+    .array(
+      z.object({
+        videoId: z.string().uuid(),
+        caption: z.string().max(1024).optional(),
+        // Nombre que se muestra en el editor.
+        label: z.string().max(200).optional(),
+      }),
+    )
+    .max(10)
+    .optional(),
   branches: z.array(branchSchema).max(20).optional(),
   budgetOptions: z.array(budgetOptionSchema).min(1).max(50).optional(),
   fallbackStepId: z.string().trim().min(1).max(80).optional(),
@@ -152,10 +165,10 @@ const scenarioSchema = z
           code: "custom",
           message: `Paso ${index + 1} (${step.label}): agrega al menos una opción`,
         });
-      if (step.type === "send_media" && !step.items?.length && !step.packageIds?.length && !step.products?.length)
+      if (step.type === "send_media" && !step.items?.length && !step.packageIds?.length && !step.products?.length && !step.savedVideos?.length)
         ctx.addIssue({
           code: "custom",
-          message: `Paso ${index + 1} (${step.label}): agrega al menos un archivo, conjunto o producto`,
+          message: `Paso ${index + 1} (${step.label}): agrega al menos un archivo, conjunto, producto o video guardado`,
         });
       if (step.type === "budget_recommendation" && !step.budgetOptions?.length)
         ctx.addIssue({
@@ -856,6 +869,16 @@ const run = async (
           item.mediaId,
           item.caption,
         );
+    }
+  // Videos guardados: si alguno se eliminó, se omite y el escenario continúa.
+  if (step.type === "send_media")
+    for (const video of step.savedVideos || []) {
+      try {
+        const mediaId = await require("./video-reuse.service").freshMediaId(organizationId, video.videoId);
+        await conversations.queueExistingMedia(organizationId, conversationId, "video", mediaId, video.caption?.trim() || undefined);
+      } catch (error) {
+        log("warn", "Scenario saved video skipped", { scenario: scenario.key, step: step.id, error: error.message });
+      }
     }
   // Las agotadas o sin foto se omiten: el cliente solo ve lo que sí hay.
   if (step.type === "send_media" && step.products?.length) {

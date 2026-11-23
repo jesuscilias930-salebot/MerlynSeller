@@ -28,7 +28,7 @@ exports.authenticate = async token => {
 };
 exports.list = async organizationId => (await scenarios.list(organizationId)).map(row => ({ ...row, revision: revision(row) }));
 exports.context = async (organizationId, client = db) => {
-  const [columns, packages, documents, saved] = await Promise.all([
+  const [columns, packages, documents, saved, savedVideos] = await Promise.all([
     client.query('SELECT id,name,position FROM lead_columns WHERE organization_id=$1 ORDER BY position', [organizationId]),
     client.query(`SELECT p.id,p.name,p.media_id AS "mediaId",p.filename,p.bundle_type AS "bundleType",
       COALESCE(json_agg(json_build_object('mediaId',i.media_id,'filename',i.filename,'caption',i.caption) ORDER BY i.position) FILTER (WHERE i.id IS NOT NULL),'[]') AS images
@@ -36,6 +36,7 @@ exports.context = async (organizationId, client = db) => {
       WHERE p.organization_id=$1 GROUP BY p.id ORDER BY p.position`, [organizationId]),
     client.query('SELECT id,filename,caption,media_id AS "mediaId",is_catalog AS "isCatalog" FROM document_templates WHERE organization_id=$1', [organizationId]),
     client.query('SELECT steps FROM automation_scenarios WHERE organization_id=$1', [organizationId]),
+    client.query('SELECT id,name,bytes FROM saved_videos WHERE organization_id=$1 ORDER BY position, created_at', [organizationId]),
   ]);
   const scenarioMedia = [...new Map(saved.rows.flatMap(row => (row.steps || []).flatMap(step =>
     [...(step.items || []), ...(step.budgetOptions || []).flatMap(option => option.items || [])]
@@ -48,6 +49,8 @@ exports.context = async (organizationId, client = db) => {
   ]);
   return {
     columns: columns.rows, packages: packages.rows, documents: documents.rows, scenarioMedia,
+    // Para pasos send_media → savedVideos: videos de «Videos guardados» (videoId = id).
+    savedVideos: savedVideos.rows,
     // Para pasos send_media → products: una entrada por modelo · color · género con sus tallas disponibles hoy.
     productsWithSizes: catalog.rows ? catalog.rows.map(row => ({ productId: row.productId, title: row.title, category: row.category, availableSizes: row.sizes, hasStorePhoto: row.photos.length > 0 })) : [],
     ...(catalog.error ? { productsWithSizesError: catalog.error } : {}),
@@ -62,6 +65,7 @@ exports.validate = async (organizationId, input, client = db) => {
   const context = await exports.context(organizationId, client);
   const columns = new Set(context.columns.map(row => row.id));
   const packages = new Set(context.packages.map(row => row.id));
+  const savedVideoIds = new Set((context.savedVideos || []).map(row => row.id));
   const media = new Set([...context.scenarioMedia.map(row => row.mediaId), ...context.documents.map(row => row.mediaId), ...context.packages.flatMap(row => [row.mediaId, ...row.images.map(image => image.mediaId)])].filter(Boolean));
   const ids = new Map(definition.steps.map(step => [step.id, step]));
   const reachable = new Set(); const pending = [definition.steps[0].id];
@@ -74,7 +78,8 @@ exports.validate = async (organizationId, input, client = db) => {
     if (!reachable.has(step.id)) fail(400, `El paso ${step.label} no está conectado al inicio`);
     if (step.type === 'move_column' && !columns.has(step.columnId)) fail(400, 'Selecciona una columna existente de tu negocio');
     if (step.type === 'send_catalog' && !context.documents.some(row => row.isCatalog)) fail(400, 'Configura el catálogo del negocio antes de usar este paso');
-    if (step.type === 'send_media' && !step.items?.length && !step.packageIds?.length && !step.products?.length) fail(400, 'El paso de fotografías/documentos necesita archivos, un conjunto o productos');
+    if (step.type === 'send_media' && !step.items?.length && !step.packageIds?.length && !step.products?.length && !step.savedVideos?.length) fail(400, 'El paso de fotografías/documentos necesita archivos, un conjunto, productos o videos guardados');
+    for (const video of step.savedVideos || []) if (!savedVideoIds.has(video.videoId)) fail(400, 'El video guardado no existe en tu negocio; usa un id de savedVideos');
     if (step.products?.length) {
       if (context.productsWithSizesError) fail(503, `No se pudieron verificar los productos: ${context.productsWithSizesError}`);
       const known = new Set(context.productsWithSizes.map(row => row.productId));

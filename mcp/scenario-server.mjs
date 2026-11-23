@@ -19,6 +19,8 @@ export const definitionSchema = z.object({
     resendCatalog: z.boolean().optional(), nextStepId: reference.optional(), fallbackStepId: reference.optional(), columnId: z.uuid().optional(),
     items: z.array(media).max(20).optional(),
     packageIds: z.array(z.uuid()).max(10).optional().describe('send_media/send_catalog: conjuntos reutilizables (UUID de consultar_recursos_escenarios → packages); se envían sus fotos actuales. Al editar, conservar los que ya tenga el paso.'),
+    savedVideos: z.array(z.object({ videoId: z.uuid(), caption: z.string().max(1024).optional(), label: z.string().max(200).optional() })).max(10).optional()
+      .describe('send_media: videos de «Videos guardados» (videoId y label de consultar_recursos_escenarios → savedVideos). caption opcional = mensaje junto al video. Al editar, conservar los que ya tenga el paso.'),
     products: z.array(z.object({ productId: z.number().int().positive(), mediaId: z.string().min(1).max(256).optional(), caption: z.string().max(800).optional(), label: z.string().max(200).optional() })).max(20).optional()
       .describe('send_media: imágenes de productos con «Tallas disponibles: …» calculadas con el inventario al enviar. productId y label de consultar_recursos_escenarios → productsWithSizes. Sin mediaId usa la foto del E-commerce (hasStorePhoto). caption = mensaje antes de las tallas. Lo agotado no se envía.'),
     header: z.string().max(60).optional(), footer: z.string().max(60).optional(), format: z.enum(['auto','buttons','list']).optional(),
