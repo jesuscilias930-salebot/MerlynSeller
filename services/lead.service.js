@@ -78,11 +78,14 @@ exports.board = async (organizationId, userId, boardId) => {
       latest.direction AS "lastDirection",
       c.column_pinned_at AS "columnPinnedAt",
       (SELECT name FROM column_rules rule WHERE rule.id = c.column_pinned_rule_id) AS "columnPinnedRule",
-      (c.status = 'open' AND latest.direction = 'inbound') AS "needsResponse",
+      (c.status = 'open' AND EXISTS (SELECT 1 FROM messages pending WHERE pending.conversation_id = c.id AND pending.direction = 'inbound'
+      AND pending.created_at > COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status <> 'failed' AND answer.deleted_at IS NULL), '-infinity'::timestamptz))) AS "needsResponse",
       (SELECT COUNT(*)::int FROM messages m
         WHERE m.conversation_id = c.id
           AND m.direction = 'inbound'
-          AND m.created_at > COALESCE((SELECT last_read_at FROM conversation_read_states rs WHERE rs.conversation_id = c.id AND rs.user_id = $2), '-infinity'::timestamptz)
+          AND m.created_at > GREATEST(COALESCE((SELECT last_read_at FROM conversation_read_states rs WHERE rs.conversation_id = c.id AND rs.user_id = $2), '-infinity'::timestamptz),
+            -- Ya respondido (por una persona o por el CRM): lo anterior a la respuesta no queda pendiente.
+            COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status <> 'failed' AND answer.deleted_at IS NULL), '-infinity'::timestamptz))
       ) AS "unreadCount"
     FROM conversations c
     JOIN contacts ct ON ct.id = c.contact_id
