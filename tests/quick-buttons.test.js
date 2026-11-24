@@ -54,3 +54,24 @@ test('la primera imagen lleva el texto de la respuesta rápida como pie', async 
     assert.deepEqual(sent, [['m-a', 'Así es la caja'], ['m-b', null]]);
   } finally { db.query = original.query; conversations.queueExistingMedia = original.existing; }
 });
+
+test('la invitación puede ser una «Invitación con botón» guardada', async () => {
+  const CTA = '33333333-3333-4333-8333-333333333333';
+  const original = { query: db.query, cta: conversations.queueCtaUrl }; let saved; let sent;
+  db.query = async (sql, args) => {
+    if (sql.includes('FROM cta_url_templates') && sql.startsWith('SELECT id')) return { rows: args[0] === CTA ? [{ id: CTA }] : [] };
+    if (sql.includes('FROM cta_url_templates')) return { rows: [{ header: null, header_image_url: 'https://img/x.jpg', body: 'Únete a nuestro grupo VIP', footer: null, button_text: 'Unirme', url: 'https://chat.whatsapp.com/ABC' }] };
+    if (sql.includes('INSERT INTO chat_quick_buttons')) { saved = JSON.parse(args[1]); return { rows: [] }; }
+    if (sql.includes('SELECT config')) return { rows: [{ config: saved }] };
+    return { rows: [] };
+  };
+  conversations.queueCtaUrl = async (_o, _c, input) => { sent = input; return { id: 'm' }; };
+  try {
+    const config = await quickButtons.save('org', { invitation: { label: 'Grupo VIP', ctaUrlTemplateId: CTA, text: 'se ignora' } });
+    assert.deepEqual(config.invitation, { label: 'Grupo VIP', ctaUrlTemplateId: CTA });
+    await quickButtons.sendInvitation('org', 'conv');
+    assert.deepEqual(sent, { headerImageUrl: 'https://img/x.jpg', body: 'Únete a nuestro grupo VIP', buttonText: 'Unirme', url: 'https://chat.whatsapp.com/ABC' });
+    await assert.rejects(quickButtons.save('org', { invitation: { label: 'X', ctaUrlTemplateId: '44444444-4444-4444-8444-444444444444' } }), /ya no existe/);
+    await assert.rejects(quickButtons.save('org', { invitation: { label: 'X' } }), /Elige una invitación/);
+  } finally { db.query = original.query; conversations.queueCtaUrl = original.cta; }
+});
