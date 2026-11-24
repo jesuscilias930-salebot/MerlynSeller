@@ -94,6 +94,10 @@ exports.sendSavedVideo = async (req, res, next) => {
     try { await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id); return res.status(202).json(await require('../services/video-reuse.service').queueSaved(req.auth.organizationId, req.params.id, req.body)); }
     catch (error) { return handle(error, res, next); }
 };
+exports.sendInvitation = async (req, res, next) => {
+    try { await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id); return res.status(202).json(await require('../services/chat-quick-buttons.service').sendInvitation(req.auth.organizationId, req.params.id)); }
+    catch (error) { return handle(error, res, next); }
+};
 exports.sendCtaUrl = async (req, res, next) => {
     try { await conversations.disableScenariosForHuman(req.auth.organizationId, req.params.id); return res.status(202).json(await conversations.queueCtaUrl(req.auth.organizationId, req.params.id, req.body)); }
     catch (error) { return handle(error, res, next); }

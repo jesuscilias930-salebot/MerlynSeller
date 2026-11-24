@@ -24,6 +24,7 @@ router.get('/:id/document-options', controller.documentOptions);
 router.get('/:id/messages/:messageId/media', controller.media);
 router.post('/:id/messages/text', controller.sendText);
 router.post('/:id/messages/cta-url', controller.sendCtaUrl);
+router.post('/:id/messages/invitation', controller.sendInvitation);
 router.post('/:id/messages/location', controller.sendLocation);
 router.post('/:id/messages/options', controller.sendOptions);
 router.post('/:id/messages/template', controller.sendTemplate);

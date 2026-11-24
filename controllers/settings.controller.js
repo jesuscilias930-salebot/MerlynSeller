@@ -471,3 +471,9 @@ exports.savedVideoMedia = async (req, res, next) => {
     return res.send(file);
   } catch (error) { return videoError(error, res, next); }
 };
+
+// Botones rápidos del chat (invitación con enlace y 5 conjuntos de imágenes).
+const quickButtons = require('../services/chat-quick-buttons.service');
+const quickError = (error, res, next) => (error.status ? res.status(error.status).json({ error: error.message }) : next(error));
+exports.getChatQuickButtons = async (req, res, next) => { try { return res.json(await quickButtons.get(req.auth.organizationId)); } catch (error) { return quickError(error, res, next); } };
+exports.saveChatQuickButtons = async (req, res, next) => { try { return res.json(await quickButtons.save(req.auth.organizationId, req.body)); } catch (error) { return quickError(error, res, next); } };

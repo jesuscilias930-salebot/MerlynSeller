@@ -435,6 +435,8 @@ exports.queueEntrepreneurPackages = async (organizationId, conversationId, input
   const parsed = z.object({
     packageIds: z.array(z.string().uuid()).min(1).max(20).optional(),
     imageIds: z.array(z.string().uuid()).min(1).max(50).optional(),
+    // Texto que va como pie de la primera imagen (respuestas rápidas con imágenes).
+    caption: z.string().trim().max(1024).optional(),
   }).refine((value) => Boolean(value.packageIds?.length) !== Boolean(value.imageIds?.length), 'Select packageIds or imageIds, not both').safeParse(input);
   if (!parsed.success) {
     const error = new Error(parsed.error.issues[0].message);
@@ -457,9 +459,10 @@ exports.queueEntrepreneurPackages = async (organizationId, conversationId, input
       throw error;
     }
     const queued = [];
-    for (const imageId of requestedIds) {
+    for (const [index, imageId] of requestedIds.entries()) {
       const image = byId.get(imageId);
-      queued.push(await exports.queueExistingMedia(organizationId, conversationId, 'image', image.mediaId, image.caption));
+      const caption = index === 0 && parsed.data.caption ? parsed.data.caption : image.caption;
+      queued.push(await exports.queueExistingMedia(organizationId, conversationId, 'image', image.mediaId, caption));
     }
     return { queued };
   }

@@ -55,7 +55,7 @@ const send = (message) => message.channel && message.channel !== 'whatsapp'
             ? sendInteractive(message)
             : message.type === 'template'
               ? messageService.sendTemplate({ to: message.phone_number, ...JSON.parse(message.body || '{}') })
-            : messageService.sendText({ to: message.phone_number, body: message.body, replyToProviderMessageId: message.reply_to_provider_message_id || undefined });
+            : messageService.sendText({ to: message.phone_number, body: message.body, previewUrl: /https?:\/\//i.test(message.body || ''), replyToProviderMessageId: message.reply_to_provider_message_id || undefined });
 
 // Si la plantilla era de un recordatorio automático, avisa en el chat interno.
 const notifyReminder = async (messageId, status, failure) => {

@@ -43,4 +43,6 @@ router.get('/saved-videos/:id/media', requireUser, controller.savedVideoMedia);
 router.post('/saved-videos/upload', requireUser, requireRole('owner', 'admin'), videoUpload(controller.uploadSavedVideo));
 router.patch('/saved-videos/:id', requireUser, requireRole('owner', 'admin'), controller.updateSavedVideo);
 router.delete('/saved-videos/:id', requireUser, requireRole('owner', 'admin'), controller.deleteSavedVideo);
+router.get('/chat-quick-buttons', requireUser, controller.getChatQuickButtons);
+router.put('/chat-quick-buttons', requireUser, requireRole('owner', 'admin'), controller.saveChatQuickButtons);
 module.exports = router;
