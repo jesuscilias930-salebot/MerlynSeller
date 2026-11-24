@@ -7,7 +7,9 @@ const { pipeline } = require('node:stream/promises');
 
 const MAX_VIDEO_UPLOAD_BYTES = 250 * 1024 * 1024;
 const videoTypes = new Set(['video/mp4', 'video/3gpp', 'video/quicktime', 'video/x-m4v']);
-let busy = false;
+// Subidas simultáneas (se guardan en disco; la conversión va en fila): tope para no llenar el disco.
+let active = 0;
+const MAX_ACTIVE = 4;
 
 // Stream originals to a private temporary file, not a 250 MB request buffer.
 exports.videoUpload = (handler) => async (req, res, next) => {
@@ -17,8 +19,8 @@ exports.videoUpload = (handler) => async (req, res, next) => {
   if (Number(req.get('content-length')) > MAX_VIDEO_UPLOAD_BYTES) {
     return res.status(413).json({ error: 'El video no puede superar 250 MB.' });
   }
-  if (busy) return res.status(429).json({ error: 'Hay un video subiendo o en preparación. Intenta nuevamente en unos momentos.' });
-  busy = true;
+  if (active >= MAX_ACTIVE) return res.status(429).json({ error: 'Hay varios videos subiendo o en preparación. Intenta nuevamente en unos momentos.' });
+  active += 1;
   req.videoLog?.('upload_started');
   let directory;
   try {
@@ -43,7 +45,7 @@ exports.videoUpload = (handler) => async (req, res, next) => {
     }
   } finally {
     try { if (directory) await rm(directory, { recursive: true, force: true }); }
-    finally { busy = false; }
+    finally { active -= 1; }
   }
 };
 exports.MAX_VIDEO_UPLOAD_BYTES = MAX_VIDEO_UPLOAD_BYTES;

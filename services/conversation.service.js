@@ -89,7 +89,10 @@ exports.list = async (organizationId, userId) => (await db.query(`
   last_message: messagePreview({ body, type, filename, deleted }),
 }));
 exports.messages = async (organizationId, conversationId, userId) => (await db.query(`
-  SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename, m.status, m.error_code, m.provider_message_id, m.referral, m.message_metadata AS "messageMetadata", m.created_at,
+  SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename,
+    -- Un video que lleva más de 15 min «preparándose» se interrumpió (p. ej. reinicio del servidor).
+    CASE WHEN m.status = 'processing' AND m.created_at < now() - interval '15 minutes' THEN 'failed' ELSE m.status END AS status,
+    CASE WHEN m.status = 'processing' AND m.created_at < now() - interval '15 minutes' THEN 'Se interrumpió la preparación del video. Envíalo de nuevo.' ELSE m.error_code END AS error_code, m.provider_message_id, m.referral, m.message_metadata AS "messageMetadata", m.created_at,
     (m.deleted_at IS NOT NULL) AS "deletedForEveryone",
     m.reply_to_message_id AS "replyToMessageId", replied.body AS "replyToBody", replied.type AS "replyToType", replied.direction AS "replyToDirection",
     (replied.media_id IS NOT NULL AND replied.deleted_at IS NULL) AS "replyToHasMedia", replied.filename AS "replyToFilename",
@@ -410,6 +413,39 @@ exports.queueMedia = async (organizationId, conversationId, type, input) => {
   if (!result.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
   await outboundQueue().add(`send-${type}`, { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
   return { id: result.rows[0].id, status: 'pending', type };
+};
+
+// Video del chat: el mensaje se crea al recibir el archivo («processing», visible en el chat) y la
+// conversión + subida a Meta siguen en segundo plano. Así la petición no se corta en videos pesados
+// (antes el navegador marcaba error aunque el video sí se enviaba).
+exports.queueVideoUpload = async (organizationId, conversationId, input) => {
+  const inserted = await db.query(
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, status) SELECT $1, id, 'outbound', 'video', $3, 'processing' FROM conversations WHERE id = $2 AND organization_id = $1 RETURNING id",
+    [organizationId, conversationId, input.caption || null],
+  );
+  if (!inserted.rows[0]) { const error = new Error('Conversation not found'); error.status = 404; throw error; }
+  const messageId = inserted.rows[0].id;
+  await realtime.publish(organizationId, 'message.sent', conversationId).catch(() => {});
+  const process = async () => {
+    try {
+      input.videoLog?.('conversion_started');
+      const media = await messageService.prepareVideo(input);
+      input.videoLog?.('conversion_completed', { bytes: media.buffer.length });
+      const uploaded = await messageService.uploadMedia(media);
+      input.videoLog?.('meta_upload_completed');
+      if (input.sha256) await require('./video-reuse.service').remember(organizationId, input.sha256, uploaded.mediaId, media.buffer.length).catch((error) => console.error(JSON.stringify({ level: 'warn', message: 'Video cache save failed', errorMessage: error.message })));
+      const ready = await db.query("UPDATE messages SET media_id=$2, status='pending', updated_at=now() WHERE id=$1 AND status='processing' RETURNING id", [messageId, uploaded.mediaId]);
+      if (ready.rows[0]) await outboundQueue().add('send-video', { messageId }, { jobId: messageId });
+    } catch (error) {
+      const reason = (error.status && error.message) || 'No fue posible preparar el video.';
+      input.videoLog?.('processing_failed', { status: error.status || 500, errorType: error.name });
+      await db.query("UPDATE messages SET status='failed', error_code=$2, updated_at=now() WHERE id=$1 AND status='processing'", [messageId, String(reason).slice(0, 500)]).catch(() => {});
+      await realtime.publish(organizationId, 'message.failed', conversationId).catch(() => {});
+      // Lo que se escribió después del video ya no tiene que esperarlo.
+      await outboundQueue().add('drain-after-video', { conversationId }, { jobId: `drain-${messageId}` }).catch(() => {});
+    }
+  };
+  return { message: { id: messageId, status: 'processing', type: 'video' }, process };
 };
 
 // Reuses a Meta media id already uploaded by the organization. Scenario

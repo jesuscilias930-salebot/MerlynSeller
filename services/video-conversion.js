@@ -5,7 +5,19 @@ const { join } = require('node:path');
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const { MAX_VIDEO_UPLOAD_BYTES } = require('../middleware/video-upload.middleware');
-let active = false;
+// Una conversión a la vez (CPU limitada): las demás esperan su turno en orden en vez de fallar.
+let tail = Promise.resolve();
+let waiting = 0;
+const MAX_WAITING = 6;
+const turn = async () => {
+  if (waiting >= MAX_WAITING) throw failure(429, 'Hay muchos videos en preparación. Intenta nuevamente en unos momentos.');
+  waiting += 1;
+  let release;
+  const previous = tail;
+  tail = new Promise(resolve => { release = resolve; });
+  try { await previous; } finally { waiting -= 1; }
+  return release;
+};
 const failure = (status, message) => Object.assign(new Error(message), { status });
 
 const run = (command, args, { timeoutMs = 180000, output, maxBytes } = {}) => new Promise((resolve, reject) => {
@@ -50,8 +62,7 @@ exports.convertVideo = async (buffer, uploadedPath) => {
   if (!uploadedPath && (!Buffer.isBuffer(buffer) || !buffer.length)) throw failure(400, 'Selecciona un video válido.');
   const inputSize = uploadedPath ? (await stat(uploadedPath)).size : buffer.length;
   if (inputSize > MAX_VIDEO_UPLOAD_BYTES) throw failure(413, 'El video no puede superar 250 MB.');
-  if (active) throw failure(429, 'Hay un video en preparación. Intenta nuevamente en unos momentos.');
-  active = true;
+  const release = await turn();
   let directory;
   try {
     directory = await mkdtemp(join(tmpdir(), 'merlyn-video-'));
@@ -82,6 +93,6 @@ exports.convertVideo = async (buffer, uploadedPath) => {
     return await readFile(output);
   } finally {
     try { if (directory) await rm(directory, { recursive: true, force: true }); }
-    finally { active = false; }
+    finally { release(); }
   }
 };

@@ -156,6 +156,17 @@ const sendMedia = (type) => async (req, res, next) => {
         const filename = decodeURIComponent(req.get('x-upload-filename') || type);
         const caption = decodeURIComponent(req.get('x-message-caption') || '');
         if (!(type === 'video' && req.videoUploadPath) && (!Buffer.isBuffer(req.body) || req.body.length === 0)) return res.status(400).json({ error: `${type} file is required` });
+        // Video: se responde al recibir el archivo y la preparación sigue aquí mismo (el archivo temporal
+        // se conserva hasta que termine).
+        if (type === 'video' && req.videoUploadPath) {
+            const job = await conversations.queueVideoUpload(req.auth.organizationId, req.params.id, {
+                videoUploadPath: req.videoUploadPath, videoLog: req.videoLog, contentType, filename,
+                caption: caption || undefined, sha256: req.get('x-content-sha256') || undefined,
+            });
+            res.status(202).json(job.message);
+            await job.process();
+            return undefined;
+        }
         return res.status(202).json(await conversations.queueMedia(req.auth.organizationId, req.params.id, type, {
             buffer: req.body,
             videoUploadPath: type === 'video' ? req.videoUploadPath : undefined,

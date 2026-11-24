@@ -75,7 +75,7 @@ test('video preparation converts to MP4, cleans files and reports failures', asy
   assert.ok(argsSeen.includes('libx264'));
   failRemux = false;
   probeResult = { streams: [] };
-  const first = prepareVideo(input);
-  await assert.rejects(prepareVideo(input), { status: 429 });
-  await first;
+  // Dos videos a la vez: el segundo espera su turno (ya no falla con «Hay un video en preparación»).
+  const [first, second] = await Promise.all([prepareVideo(input), prepareVideo(input)]);
+  assert.equal(first.contentType, 'video/mp4'); assert.equal(second.contentType, 'video/mp4');
 });

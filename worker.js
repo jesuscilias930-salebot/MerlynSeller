@@ -26,6 +26,10 @@ const pendingMessage = async (conversationId) => (await db.query(`
     AND m.direction = 'outbound'
     AND m.status = 'pending'
     AND m.deleted_at IS NULL
+    -- Un video anterior aún preparándose (máx. 15 min) conserva su lugar: lo que sigue espera.
+    AND NOT EXISTS (SELECT 1 FROM messages p WHERE p.conversation_id = m.conversation_id AND p.direction = 'outbound'
+      AND p.status = 'processing' AND p.deleted_at IS NULL AND p.created_at > now() - interval '15 minutes'
+      AND p.outbound_sequence < m.outbound_sequence)
   ORDER BY m.outbound_sequence ASC NULLS LAST, m.created_at ASC, m.id ASC
   LIMIT 1
 `, [conversationId])).rows[0];
