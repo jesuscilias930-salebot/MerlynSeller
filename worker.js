@@ -199,3 +199,15 @@ const checkReminders = async () => {
 };
 setInterval(() => { void checkReminders(); }, REMINDER_INTERVAL_MS);
 void checkReminders();
+
+// Seguimientos automáticos: cada minuto revisa a qué chats les toca el siguiente paso.
+const followUps = require('./services/follow-up.service');
+const checkFollowUps = async () => {
+  try {
+    const result = await followUps.run();
+    if (result.sent) console.log(JSON.stringify({ level: 'info', message: 'Follow-ups sent', count: result.sent }));
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'error', message: 'Follow-up check failed', errorType: error.name, errorMessage: error.message }));
+  }
+};
+setInterval(() => { void checkFollowUps(); }, 60_000);
