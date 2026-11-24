@@ -35,6 +35,18 @@ const messageMetadataFor = (message) => {
     }).filter((contact) => contact.name || contact.phones.length || contact.emails.length) : [];
     return contacts.length ? { contacts } : null;
   }
+  // WhatsApp no comparte el contenido de algunos mensajes (encuestas, mensajes editados, álbumes, invitaciones…):
+  // se guarda qué tipo era y el error para explicarlo en el chat.
+  if (message.type === 'unsupported' || message.type === 'unknown') {
+    const error = Array.isArray(message.errors) ? message.errors[0] || {} : {};
+    const detail = {
+      type: text(message.unsupported?.type, 60),
+      code: number(error.code),
+      title: text(error.title, 200),
+      details: text(error.error_data?.details || error.message, 300),
+    };
+    return Object.values(detail).some((value) => value !== undefined) ? { unsupported: detail } : null;
+  }
   if (message.type === 'location') {
     const location = message.location || {};
     const latitude = number(location.latitude);
@@ -303,3 +315,4 @@ exports.process = async (payload) => {
     }
   }
 };
+exports.messageMetadataFor = messageMetadataFor;

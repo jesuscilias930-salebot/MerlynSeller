@@ -43,7 +43,7 @@ const validation = (schema, value) => {
 
 // Vista previa del último mensaje (enviado o recibido) como en WhatsApp: fotos, documentos,
 // plantillas y mensajes interactivos también muestran un texto aunque no tengan cuerpo.
-const PREVIEW_LABELS = { image: '📷 Foto', video: '🎥 Video', audio: '🎤 Audio', voice: '🎤 Audio', sticker: 'Sticker', document: '📄 Documento', location: '📍 Ubicación', contacts: '👤 Contacto', template: '📋 Plantilla', interactive: 'Mensaje con opciones', button: 'Respuesta', unknown: 'Mensaje' };
+const PREVIEW_LABELS = { image: '📷 Foto', video: '🎥 Video', audio: '🎤 Audio', voice: '🎤 Audio', sticker: 'Sticker', document: '📄 Documento', location: '📍 Ubicación', contacts: '👤 Contacto', template: '📋 Plantilla', interactive: 'Mensaje con opciones', button: 'Respuesta', unsupported: '⚠️ Mensaje que WhatsApp no comparte', unknown: 'Mensaje' };
 const parseJson = (value) => { try { return JSON.parse(value); } catch { return null; } };
 const messagePreview = (latest) => {
   if (!latest?.type) return null;
