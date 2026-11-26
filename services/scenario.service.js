@@ -147,6 +147,14 @@ const scenarioSchema = z
       .object({ templateId: z.string().uuid(), templateName: z.string().trim().min(1).max(512) })
       .nullable()
       .optional(),
+    // Campaña a la que pertenece (solo para agrupar en la lista, p. ej. «Campaña 120»). Vacío = sin campaña.
+    campaign: z
+      .string()
+      .trim()
+      .max(60)
+      .nullable()
+      .optional()
+      .transform((value) => (value === undefined ? undefined : value || null)),
   })
   .superRefine((value, ctx) => {
     if (!value.templateTrigger && !value.triggerExamples.length)
@@ -297,6 +305,7 @@ const toRow = (row) => ({
   steps: row.steps || [],
   quoteBundle: row.quoteBundle || null,
   templateTrigger: row.templateTrigger || null,
+  campaign: row.campaign || null,
 });
 const slug = (name) =>
   normalize(name)
@@ -319,7 +328,7 @@ const withTemplateName = async (organizationId, value) => {
 exports.list = async (organizationId) =>
   (
     await db.query(
-      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY position ASC, created_at ASC',
+      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY position ASC, created_at ASC',
       [organizationId],
     )
   ).rows.map(toRow);
@@ -331,7 +340,7 @@ exports.create = async (organizationId, input) => {
     const key = suffix ? `${base}_${suffix + 1}` : base;
     try {
       const result = await db.query(
-        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,ai_description,priority,can_interrupt,position,steps,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$1),0),$9,jsonb_build_object(\'quoteBundle\',$10::jsonb,\'templateTrigger\',$11::jsonb)) RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",updated_at AS "updatedAt"',
+        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,ai_description,priority,can_interrupt,position,steps,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$1),0),$9,jsonb_build_object(\'quoteBundle\',$10::jsonb,\'templateTrigger\',$11::jsonb,\'campaign\',$12::text)) RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",updated_at AS "updatedAt"',
         [
           organizationId,
           key,
@@ -344,6 +353,7 @@ exports.create = async (organizationId, input) => {
           JSON.stringify(value.steps),
           JSON.stringify(value.quoteBundle || null),
           JSON.stringify(value.templateTrigger || null),
+          value.campaign || null,
         ],
       );
       return toRow(result.rows[0]);
@@ -358,7 +368,7 @@ exports.create = async (organizationId, input) => {
 exports.update = async (organizationId, id, input) => {
   const value = await withTemplateName(organizationId, parse(input));
   const result = await db.query(
-    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=COALESCE(CASE WHEN $10::boolean THEN COALESCE(config,\'{}\'::jsonb) || jsonb_build_object(\'quoteBundle\',$11::jsonb) ELSE config END,\'{}\'::jsonb) || CASE WHEN $12::boolean THEN jsonb_build_object(\'templateTrigger\',$13::jsonb) ELSE \'{}\'::jsonb END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",updated_at AS "updatedAt"',
+    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=COALESCE(CASE WHEN $10::boolean THEN COALESCE(config,\'{}\'::jsonb) || jsonb_build_object(\'quoteBundle\',$11::jsonb) ELSE config END,\'{}\'::jsonb) || CASE WHEN $12::boolean THEN jsonb_build_object(\'templateTrigger\',$13::jsonb) ELSE \'{}\'::jsonb END || CASE WHEN $14::boolean THEN jsonb_build_object(\'campaign\',$15::text) ELSE \'{}\'::jsonb END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",updated_at AS "updatedAt"',
     [
       id,
       organizationId,
@@ -375,6 +385,8 @@ exports.update = async (organizationId, id, input) => {
       // Igual que el paquete: sin el campo se conserva la plantilla configurada; null la quita.
       value.templateTrigger !== undefined,
       JSON.stringify(value.templateTrigger || null),
+      value.campaign !== undefined,
+      value.campaign || null,
     ],
   );
   if (!result.rows[0]) {
@@ -450,6 +462,7 @@ exports.duplicate = async (organizationId, id) => {
     steps: source.steps,
     quoteBundle: source.quoteBundle || null,
     templateTrigger: source.templateTrigger || null,
+    campaign: source.campaign || null,
   });
   const order = all.map((scenario) => scenario.id);
   order.splice(order.indexOf(source.id) + 1, 0, created.id);

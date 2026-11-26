@@ -93,3 +93,11 @@ test('plantilla vieja (más de 7 días) o fallida no cuenta como respuesta', asy
     assert.deepEqual(await scenarios.templateReplyContext('org', 'conv', { id: 'wamid.8' }), { templateId: TPL, messageId: 'm1' });
   });
 });
+
+test('campaña: se recorta, vacío = sin campaña y omitirla la conserva', () => {
+  const base = { name: 'CE120 · Envío', triggerExamples: ['envio'], steps: steps('Va') };
+  assert.equal(scenarios.parseDefinition({ ...base, campaign: '  Campaña 120 ' }).campaign, 'Campaña 120');
+  assert.equal(scenarios.parseDefinition({ ...base, campaign: '   ' }).campaign, null);
+  assert.equal(scenarios.parseDefinition(base).campaign, undefined);
+  assert.throws(() => scenarios.parseDefinition({ ...base, campaign: 'x'.repeat(61) }));
+});

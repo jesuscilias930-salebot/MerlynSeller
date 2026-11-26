@@ -12,6 +12,8 @@ export const definitionSchema = z.object({
   canInterrupt: z.boolean().default(true), isActive: z.boolean().default(false).describe('Crear apagado por defecto. true solo si el usuario autoriza activar respuestas a clientes.'),
   quoteBundle: z.object({ id: z.string().trim().min(1).max(80), name: z.string().trim().min(1).max(160) }).nullable().optional()
     .describe('Paquete con el que abre el cotizador del chat cuando este escenario se activa. Usar id y name de consultar_recursos_escenarios → quoteBundles. Omitir = conservar el actual; null = quitarlo.'),
+  campaign: z.string().trim().max(60).nullable().optional()
+    .describe('Campaña para agrupar el escenario en la lista (p. ej. «Campaña 120»). Usa el mismo texto que los escenarios de esa campaña. Omitir = conservar; null = sin campaña.'),
   steps: z.array(z.object({
     id: reference, label: z.string().min(1).max(100), type: z.enum(['send_text','send_catalog','send_media','wait_reply','send_options','budget_recommendation','move_column','end']),
     body: z.string().max(4096).optional(), caption: z.string().max(1024).optional(), fallbackBody: z.string().max(4096).optional(),

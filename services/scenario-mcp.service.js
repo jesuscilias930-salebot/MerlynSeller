@@ -5,8 +5,8 @@ const scenarios = require('./scenario.service');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 // Igual que scenario.service.list (mismas columnas, orden y normalización): la revisión debe coincidir.
-const projection = 'id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",updated_at AS "updatedAt"';
-const normalized = row => row && ({ ...row, triggerExamples: row.triggerExamples || [], steps: row.steps || [], quoteBundle: row.quoteBundle || null, templateTrigger: row.templateTrigger || null });
+const projection = 'id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",updated_at AS "updatedAt"';
+const normalized = row => row && ({ ...row, triggerExamples: row.triggerExamples || [], steps: row.steps || [], quoteBundle: row.quoteBundle || null, templateTrigger: row.templateTrigger || null, campaign: row.campaign || null });
 const revision = row => hash(JSON.stringify(row));
 
 exports.issue = async auth => {
@@ -121,15 +121,15 @@ exports.save = async (organizationId, input) => {
       ? { ...shape.data.definition, templateTrigger: current.templateTrigger } : shape.data.definition;
     const definition = await exports.validate(organizationId, input, client);
     // Sin quoteBundle en la definición se conserva el actual, así que no cuenta como cambio.
-    const comparable = { ...definition, ...(definition.quoteBundle === undefined && current ? { quoteBundle: editable(current).quoteBundle } : {}), ...(definition.templateTrigger === undefined && current ? { templateTrigger: editable(current).templateTrigger } : {}) };
+    const comparable = { ...definition, ...(definition.quoteBundle === undefined && current ? { quoteBundle: editable(current).quoteBundle } : {}), ...(definition.templateTrigger === undefined && current ? { templateTrigger: editable(current).templateTrigger } : {}), ...(definition.campaign === undefined && current ? { campaign: editable(current).campaign } : {}) };
     if (current && JSON.stringify(editable(current)) === JSON.stringify(comparable)) return { ...current, revision: revision(current) };
     if (current && (!expectedRevision || revision(current) !== expectedRevision)) fail(409, 'El escenario cambió. Consulta su versión actual antes de guardarlo');
     if (!current && expectedRevision) fail(404, 'Escenario no encontrado en tu negocio');
     // quoteBundle ausente conserva el paquete configurado; null lo quita.
-    const values = [id, organizationId, definition.name, definition.isActive, JSON.stringify(definition.triggerExamples), definition.aiDescription || null, definition.priority, definition.canInterrupt, JSON.stringify(definition.steps), definition.quoteBundle !== undefined, JSON.stringify(definition.quoteBundle || null)];
+    const values = [id, organizationId, definition.name, definition.isActive, JSON.stringify(definition.triggerExamples), definition.aiDescription || null, definition.priority, definition.canInterrupt, JSON.stringify(definition.steps), definition.quoteBundle !== undefined, JSON.stringify(definition.quoteBundle || null), definition.campaign !== undefined, definition.campaign || null];
     const sql = current
-      ? `UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=CASE WHEN $10::boolean THEN COALESCE(config,'{}'::jsonb) || jsonb_build_object('quoteBundle',$11::jsonb) ELSE config END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING ${projection}`
-      : `INSERT INTO automation_scenarios (id,organization_id,name,is_active,trigger_examples,ai_description,priority,can_interrupt,steps,key,position,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'mcp_'||($1::uuid)::text,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$2),0),CASE WHEN $10::boolean THEN jsonb_build_object('quoteBundle',$11::jsonb) ELSE '{}'::jsonb END) RETURNING ${projection}`;
+      ? `UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=COALESCE(CASE WHEN $10::boolean THEN COALESCE(config,'{}'::jsonb) || jsonb_build_object('quoteBundle',$11::jsonb) ELSE config END,'{}'::jsonb) || CASE WHEN $12::boolean THEN jsonb_build_object('campaign',$13::text) ELSE '{}'::jsonb END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING ${projection}`
+      : `INSERT INTO automation_scenarios (id,organization_id,name,is_active,trigger_examples,ai_description,priority,can_interrupt,steps,key,position,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'mcp_'||($1::uuid)::text,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$2),0),CASE WHEN $10::boolean THEN jsonb_build_object('quoteBundle',$11::jsonb) ELSE '{}'::jsonb END || CASE WHEN $12::boolean THEN jsonb_build_object('campaign',$13::text) ELSE '{}'::jsonb END) RETURNING ${projection}`;
     const row = normalized((await client.query(sql, values)).rows[0]);
     return { ...row, revision: revision(row) };
   });
