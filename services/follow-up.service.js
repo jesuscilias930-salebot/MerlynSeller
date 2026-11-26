@@ -95,7 +95,9 @@ exports.QUIET = { from: 21, to: 9 };
 /**
  * ¿Qué hacer ahora con este chat?
  * - wait: aún no toca (espera, horario nocturno o hay un mensaje nuestro en cola).
- * - send: dentro de la ventana para mensajes libres (24 h; 72 h si vino de un anuncio en WhatsApp).
+ * - send: dentro de la ventana para mensajes libres. En WhatsApp siempre son 24 h desde el último
+ *   mensaje del cliente: la ventana de 72 h de los anuncios solo hace gratis los mensajes, pero
+ *   después de 24 h únicamente acepta plantillas.
  * - template: fuera de la ventana, con plantilla aprobada.
  * - stop: fuera de la ventana y sin plantilla (o canal sin plantillas).
  */
@@ -107,7 +109,7 @@ exports.decide = ({ step, lastOutAt, lastInAt, fromAd = false, channel = 'whatsa
   const hour = localHour(now, timezone);
   if (hour >= exports.QUIET.from || hour < exports.QUIET.to) return { action: 'wait', reason: 'quiet_hours', dueAt };
   const sinceInbound = lastInAt ? now - new Date(lastInAt) : Infinity;
-  const freeWindow = channel === 'whatsapp' ? (fromAd ? 72 : 24) * HOUR : (fromAd ? 7 * 24 : 24) * HOUR;
+  const freeWindow = channel === 'whatsapp' ? 24 * HOUR : (fromAd ? 7 * 24 : 24) * HOUR;
   const hasContent = Boolean(step.text || step.imageIds?.length || step.videoId);
   if (sinceInbound < freeWindow && hasContent) return { action: 'send' };
   if (channel === 'whatsapp' && step.templateId) return { action: 'template' };

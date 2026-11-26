@@ -18,7 +18,8 @@ test('decide: espera, ventana de 24 h, anuncio (72 h), plantilla y horario noctu
   assert.equal(followUps.decide({ ...base, lastOutAt: '2026-11-24T16:00:00Z', outboundQueued: true }).reason, 'queued');
   const old = { ...base, lastOutAt: '2026-11-22T16:00:00Z', lastInAt: '2026-11-22T15:00:00Z' };
   assert.equal(followUps.decide(old).action, 'stop', 'pasaron 24 h y no hay plantilla');
-  assert.equal(followUps.decide({ ...old, fromAd: true }).action, 'send', 'vino de un anuncio: 72 h gratis');
+  assert.equal(followUps.decide({ ...old, fromAd: true }).action, 'stop', 'anuncio: las 72 h solo hacen gratis las plantillas; texto libre sigue siendo 24 h');
+  assert.equal(followUps.decide({ ...old, fromAd: true, step: { ...step, templateId: 't1' } }).action, 'template');
   assert.equal(followUps.decide({ ...old, step: { ...step, templateId: 't1' } }).action, 'template');
   assert.equal(followUps.decide({ ...old, channel: 'messenger', step: { ...step, templateId: 't1' } }).action, 'stop');
   assert.equal(followUps.decide({ ...base, lastOutAt: '2026-11-24T02:00:00Z', now: at('2026-11-24T05:00:00Z') }).reason, 'quiet_hours', '23:00 en México');
