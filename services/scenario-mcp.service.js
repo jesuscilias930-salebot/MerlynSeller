@@ -29,7 +29,8 @@ exports.authenticate = async token => {
 exports.list = async organizationId => (await scenarios.list(organizationId)).map(row => ({ ...row, revision: revision(row) }));
 exports.context = async (organizationId, client = db) => {
   const [columns, packages, documents, saved, savedVideos] = await Promise.all([
-    client.query('SELECT id,name,position FROM lead_columns WHERE organization_id=$1 ORDER BY position', [organizationId]),
+    // boardName: varias columnas pueden llamarse igual en distintos dashboards (p. ej. «Descartados»).
+    client.query('SELECT c.id,c.name,c.position,b.name AS "boardName" FROM lead_columns c JOIN lead_boards b ON b.id=c.board_id WHERE c.organization_id=$1 ORDER BY b.position,c.position', [organizationId]),
     client.query(`SELECT p.id,p.name,p.media_id AS "mediaId",p.filename,p.bundle_type AS "bundleType",
       COALESCE(json_agg(json_build_object('mediaId',i.media_id,'filename',i.filename,'caption',i.caption) ORDER BY i.position) FILTER (WHERE i.id IS NOT NULL),'[]') AS images
       FROM entrepreneur_packages p LEFT JOIN entrepreneur_package_images i ON i.package_id=p.id
