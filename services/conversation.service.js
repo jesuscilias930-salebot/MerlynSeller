@@ -19,11 +19,13 @@ const documentSchema = z.object({
   filename: z.string().trim().min(1).max(240).optional(),
   caption: z.string().trim().max(1024).optional(),
 });
+// Las invitaciones guardadas sin encabezado, imagen o pie traen esos campos en null: se tratan como vacíos.
+const optionalText = (schema) => schema.nullish().transform((value) => value || undefined);
 const ctaUrlSchema = z.object({
-  header: z.string().trim().max(60).optional(),
-  headerImageUrl: z.string().trim().url().max(2000).optional(),
+  header: optionalText(z.string().trim().max(60)),
+  headerImageUrl: optionalText(z.string().trim().url().max(2000)),
   body: z.string().trim().min(1).max(1024),
-  footer: z.string().trim().max(60).optional(),
+  footer: optionalText(z.string().trim().max(60)),
   buttonText: z.string().trim().min(1).max(20),
   url: z.string().trim().url().max(2000),
 });
@@ -320,8 +322,9 @@ exports.queueLocation = async (organizationId, conversationId, input = {}) => {
   return { id: result.rows[0].id, status: 'pending', type: 'location' };
 };
 
+exports.parseCtaUrl = (input) => validation(ctaUrlSchema, input);
 exports.queueCtaUrl = async (organizationId, conversationId, input) => {
-  const data = validation(ctaUrlSchema, input);
+  const data = exports.parseCtaUrl(input);
   if (!/^https:\/\//i.test(data.url)) { const error = new Error('url must use HTTPS'); error.status = 400; throw error; }
   if (data.headerImageUrl && !/^https:\/\//i.test(data.headerImageUrl)) { const error = new Error('La URL de la imagen del encabezado debe usar HTTPS.'); error.status = 400; throw error; }
   const result = await db.query(
