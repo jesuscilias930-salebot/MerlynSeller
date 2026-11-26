@@ -129,7 +129,8 @@ const stepSchema = z.object({
 const scenarioSchema = z
   .object({
     name: z.string().trim().min(2).max(100),
-    triggerExamples: z.array(z.string().trim().min(2).max(240)).min(1).max(30),
+    // Escenario de plantilla: puede no tener frases (= cualquier respuesta a la plantilla).
+    triggerExamples: z.array(z.string().trim().min(2).max(240)).max(30),
     aiDescription: z.string().trim().min(10).max(700).optional().nullable(),
     priority: z.number().int().min(0).max(1000).default(0),
     canInterrupt: z.boolean().default(true),
@@ -140,8 +141,16 @@ const scenarioSchema = z
       .object({ id: z.union([z.string().trim().min(1).max(80), z.number().int().positive()]).transform(String), name: z.string().trim().min(1).max(160) })
       .nullable()
       .optional(),
+    // Escenario de plantilla: solo lo inicia una respuesta a esta plantilla aprobada de Meta, y las
+    // respuestas a plantillas solo inician escenarios de plantilla (no compiten con los demás).
+    templateTrigger: z
+      .object({ templateId: z.string().uuid(), templateName: z.string().trim().min(1).max(512) })
+      .nullable()
+      .optional(),
   })
   .superRefine((value, ctx) => {
+    if (!value.templateTrigger && !value.triggerExamples.length)
+      ctx.addIssue({ code: "custom", message: "Frases que lo inician: agrega al menos uno" });
     const ids = new Set();
     for (const [index, step] of value.steps.entries()) {
       if (ids.has(step.id))
@@ -287,6 +296,7 @@ const toRow = (row) => ({
   triggerExamples: row.triggerExamples || [],
   steps: row.steps || [],
   quoteBundle: row.quoteBundle || null,
+  templateTrigger: row.templateTrigger || null,
 });
 const slug = (name) =>
   normalize(name)
@@ -294,22 +304,34 @@ const slug = (name) =>
     .replace(/[^a-z0-9_]/g, "")
     .slice(0, 40) || "scenario";
 
+// La plantilla debe ser de este negocio; su nombre se toma de la base, no del navegador.
+const withTemplateName = async (organizationId, value) => {
+  if (!value.templateTrigger) return value;
+  const template = (await db.query("SELECT name FROM whatsapp_templates WHERE id=$1 AND organization_id=$2", [value.templateTrigger.templateId, organizationId])).rows[0];
+  if (!template) {
+    const error = new Error("La plantilla elegida ya no existe. Sincroniza tus plantillas y elige otra.");
+    error.status = 400;
+    throw error;
+  }
+  return { ...value, templateTrigger: { templateId: value.templateTrigger.templateId, templateName: template.name } };
+};
+
 exports.list = async (organizationId) =>
   (
     await db.query(
-      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY position ASC, created_at ASC',
+      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY position ASC, created_at ASC',
       [organizationId],
     )
   ).rows.map(toRow);
 
 exports.create = async (organizationId, input) => {
-  const value = parse(input);
+  const value = await withTemplateName(organizationId, parse(input));
   const base = slug(value.name);
   for (let suffix = 0; suffix < 100; suffix += 1) {
     const key = suffix ? `${base}_${suffix + 1}` : base;
     try {
       const result = await db.query(
-        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,ai_description,priority,can_interrupt,position,steps,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$1),0),$9,jsonb_build_object(\'quoteBundle\',$10::jsonb)) RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",updated_at AS "updatedAt"',
+        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,ai_description,priority,can_interrupt,position,steps,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$1),0),$9,jsonb_build_object(\'quoteBundle\',$10::jsonb,\'templateTrigger\',$11::jsonb)) RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",updated_at AS "updatedAt"',
         [
           organizationId,
           key,
@@ -321,6 +343,7 @@ exports.create = async (organizationId, input) => {
           value.canInterrupt,
           JSON.stringify(value.steps),
           JSON.stringify(value.quoteBundle || null),
+          JSON.stringify(value.templateTrigger || null),
         ],
       );
       return toRow(result.rows[0]);
@@ -333,9 +356,9 @@ exports.create = async (organizationId, input) => {
   throw error;
 };
 exports.update = async (organizationId, id, input) => {
-  const value = parse(input);
+  const value = await withTemplateName(organizationId, parse(input));
   const result = await db.query(
-    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=CASE WHEN $10::boolean THEN COALESCE(config,\'{}\'::jsonb) || jsonb_build_object(\'quoteBundle\',$11::jsonb) ELSE config END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",updated_at AS "updatedAt"',
+    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=COALESCE(CASE WHEN $10::boolean THEN COALESCE(config,\'{}\'::jsonb) || jsonb_build_object(\'quoteBundle\',$11::jsonb) ELSE config END,\'{}\'::jsonb) || CASE WHEN $12::boolean THEN jsonb_build_object(\'templateTrigger\',$13::jsonb) ELSE \'{}\'::jsonb END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",updated_at AS "updatedAt"',
     [
       id,
       organizationId,
@@ -349,6 +372,9 @@ exports.update = async (organizationId, id, input) => {
       // Sin el campo (p. ej. una edición desde el MCP) se conserva el paquete ya configurado.
       value.quoteBundle !== undefined,
       JSON.stringify(value.quoteBundle || null),
+      // Igual que el paquete: sin el campo se conserva la plantilla configurada; null la quita.
+      value.templateTrigger !== undefined,
+      JSON.stringify(value.templateTrigger || null),
     ],
   );
   if (!result.rows[0]) {
@@ -423,6 +449,7 @@ exports.duplicate = async (organizationId, id) => {
     canInterrupt: source.canInterrupt,
     steps: source.steps,
     quoteBundle: source.quoteBundle || null,
+    templateTrigger: source.templateTrigger || null,
   });
   const order = all.map((scenario) => scenario.id);
   order.splice(order.indexOf(source.id) + 1, 0, created.id);
@@ -932,14 +959,17 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
   ]);
   if (conversation.rows[0]?.scenario_enabled === false) return { handled: false, requiresHuman: false };
   const active = scenarios.filter((scenario) => scenario.isActive);
+  // Los escenarios de plantilla solo inician con una respuesta a su plantilla (processTemplateReply);
+  // aquí siguen activos para continuar sus pasos, pero no compiten por frases.
+  const startable = active.filter((scenario) => !scenario.templateTrigger);
   // Si dos escenarios coinciden igual (p. ej. uno con la frase «si» y otro con «Sí, quiero ver el
   // catálogo»), gana la frase más específica y no el que está más arriba en la lista.
-  const rankedStarts = active.map((scenario) => ({ scenario, value: score(text, scenario.triggerExamples), specific: specificity(text, scenario.triggerExamples) })).sort((a, b) => b.value - a.value || b.specific - a.specific || a.scenario.position - b.scenario.position || b.scenario.priority - a.scenario.priority);
+  const rankedStarts = startable.map((scenario) => ({ scenario, value: score(text, scenario.triggerExamples), specific: specificity(text, scenario.triggerExamples) })).sort((a, b) => b.value - a.value || b.specific - a.specific || a.scenario.position - b.scenario.position || b.scenario.priority - a.scenario.priority);
   let newStart = rankedStarts[0]?.value >= 0.72 ? rankedStarts[0].scenario : null;
   // rulesOnly: solo inicia un escenario cuando el texto coincide con sus frases (sin IA ni pasos
   // en curso). Lo usa la escalación de cotizaciones con cantidad, p. ej. «quiero la caja de 120 pares».
   if (options.rulesOnly && !newStart) return { handled: false, requiresHuman: false };
-  if (!newStart) newStart = await aiMatchScenario(text, active);
+  if (!newStart) newStart = await aiMatchScenario(text, startable);
 
   let state = states.rows[0];
   if (state) {
@@ -1034,6 +1064,81 @@ exports.processIncoming = async (organizationId, conversationId, incoming, optio
   if (!newStart) return { handled: false, requiresHuman: false };
   await start(organizationId, conversationId, newStart, { resendCatalog: options.explicit === true });
   log("info", "Conversation scenario started", { scenario: newStart.key });
+  return { handled: true, requiresHuman: false };
+};
+
+/**
+ * ¿Este mensaje responde a una plantilla? Sí cuando el cliente usó «Responder» o tocó un botón de la
+ * plantilla (context.id), o cuando lo último que había en el chat antes de su mensaje era una
+ * plantilla nuestra enviada en los últimos 7 días. Devuelve { templateId, messageId } o null.
+ */
+exports.templateReplyContext = async (organizationId, conversationId, message) => {
+  const parseTemplate = (row) => {
+    if (!row) return null;
+    try {
+      const body = JSON.parse(row.body || "{}");
+      return body.templateId ? { templateId: body.templateId, messageId: row.id } : null;
+    } catch {
+      return null;
+    }
+  };
+  if (message?.context?.id) {
+    const replied = await db.query(
+      "SELECT id, body FROM messages WHERE organization_id=$1 AND conversation_id=$2 AND provider_message_id=$3 AND direction='outbound' AND type='template'",
+      [organizationId, conversationId, message.context.id],
+    );
+    if (replied.rows[0]) return parseTemplate(replied.rows[0]);
+  }
+  if (!message?.id) return null;
+  // Lo anterior al mensaje del cliente (no lo que se envió después, como el aviso de horario).
+  const previous = await db.query(
+    `SELECT m.id, m.direction, m.type, m.body, m.status, m.created_at FROM messages m
+     JOIN messages inbound ON inbound.conversation_id = m.conversation_id AND inbound.provider_message_id = $3
+     WHERE m.organization_id=$1 AND m.conversation_id=$2 AND m.id <> inbound.id AND m.deleted_at IS NULL AND m.created_at <= inbound.created_at
+     ORDER BY m.created_at DESC, COALESCE(m.outbound_sequence, 0) DESC LIMIT 1`,
+    [organizationId, conversationId, message.id],
+  );
+  const row = previous.rows[0];
+  if (!row || row.direction !== "outbound" || row.type !== "template" || row.status === "failed") return null;
+  if (Date.now() - new Date(row.created_at).getTime() > 7 * 24 * 3600 * 1000) return null;
+  return parseTemplate(row);
+};
+
+/**
+ * Respuesta a una plantilla: solo pueden iniciar escenarios de esa plantilla. Gana el que tenga la
+ * frase que mejor coincida (p. ej. el botón «Sí, la quiero»); si ninguno, el de «cualquier respuesta»
+ * (sin frases); si tampoco, la IA elige entre los que tienen frases. Sin coincidencia no se inicia
+ * nada y lo atiende una persona.
+ */
+exports.processTemplateReply = async (organizationId, conversationId, incoming, reply) => {
+  const text = normalize(incoming);
+  const [scenarios, conversation] = await Promise.all([
+    exports.list(organizationId),
+    db.query("SELECT scenario_enabled FROM conversations WHERE id=$1 AND organization_id=$2", [conversationId, organizationId]),
+  ]);
+  if (conversation.rows[0]?.scenario_enabled === false) return { handled: false, requiresHuman: false };
+  const candidates = scenarios.filter((scenario) => scenario.isActive && scenario.templateTrigger?.templateId === reply.templateId);
+  if (!candidates.length) {
+    log("info", "Template reply without a template scenario", { templateId: reply.templateId });
+    return { handled: false, requiresHuman: false };
+  }
+  const withPhrases = candidates.filter((scenario) => scenario.triggerExamples.length);
+  const ranked = text
+    ? withPhrases
+        .map((scenario) => ({ scenario, value: score(text, scenario.triggerExamples), specific: specificity(text, scenario.triggerExamples) }))
+        .sort((a, b) => b.value - a.value || b.specific - a.specific || a.scenario.position - b.scenario.position)
+    : [];
+  let chosen = ranked[0]?.value >= 0.72 ? ranked[0].scenario : null;
+  if (!chosen) chosen = candidates.filter((scenario) => !scenario.triggerExamples.length).sort((a, b) => a.position - b.position)[0] || null;
+  if (!chosen && text) chosen = await aiMatchScenario(text, withPhrases);
+  if (!chosen) {
+    log("info", "Template reply did not match a template scenario", { templateId: reply.templateId });
+    return { handled: false, requiresHuman: false };
+  }
+  // La respuesta a la plantilla reemplaza cualquier escenario en curso.
+  await complete(organizationId, conversationId);
+  await start(organizationId, conversationId, chosen, { resendCatalog: true });
+  log("info", "Template scenario started", { scenario: chosen.key, templateId: reply.templateId });
   return { handled: true, requiresHuman: false };
 };
 

@@ -191,6 +191,15 @@ exports.processIncoming = async (organizationId, conversationId, message, option
     return;
   }
   const text = normalize(optionReply ? optionReply.title : message.text?.body); if (!text) return;
+  // Respuesta a una plantilla aprobada de Meta (botón, «Responder» o el mensaje que sigue a la
+  // plantilla): solo la atienden los escenarios de esa plantilla. Así un «Sí» a un remarketing no
+  // inicia por error otro escenario ni una automatización; si ninguno aplica, la atiende una persona.
+  const templateReply = await scenarios.templateReplyContext(organizationId, conversationId, message);
+  if (templateReply) {
+    const result = await scenarios.processTemplateReply(organizationId, conversationId, text, templateReply);
+    if (!result.handled) log('info', 'Template reply left for a person', { conversationId, templateId: templateReply.templateId });
+    return;
+  }
   // Respuesta a un mensaje con opciones de un escenario activo: tiene prioridad
   // sobre las reglas generales para no escalar opciones como «500 pares».
   const optionResult = await scenarios.processOptionReply(organizationId, conversationId, text, optionReply?.id);
