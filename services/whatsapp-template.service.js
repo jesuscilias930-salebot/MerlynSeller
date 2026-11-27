@@ -107,6 +107,36 @@ exports.buildComponents = (templateRow, contact, manualValues = {}) => {
 };
 exports.templateResponse = (row) => response(row);
 
+/**
+ * La plantilla como mensaje con botones (dentro de las 24 h es gratis): mismo encabezado de texto,
+ * cuerpo con sus variables resueltas, pie y botones de respuesta rápida. null si no se puede (encabezado
+ * con imagen/video/documento, botones de enlace o teléfono, o sin botones de respuesta rápida).
+ */
+exports.renderAsOptions = (templateRow, contact, manualValues = {}) => {
+  const components = templateRow.components || [];
+  const find = (type) => components.find((component) => String(component.type || '').toUpperCase() === type);
+  const header = find('HEADER'); const body = find('BODY'); const footer = find('FOOTER'); const buttons = find('BUTTONS');
+  if (!body?.text) return null;
+  if (header && String(header.format || 'TEXT').toUpperCase() !== 'TEXT') return null;
+  const replies = (buttons?.buttons || []);
+  if (!replies.length || replies.some((button) => String(button.type || '').toUpperCase() !== 'QUICK_REPLY')) return null;
+  const values = new Map();
+  for (const component of exports.buildComponents(templateRow, contact, manualValues)) {
+    component.parameters.forEach((parameter, index) => values.set(`${component.type}:${index}`, parameter.text));
+  }
+  // buildComponents ordena por posición: el n-ésimo parámetro de un componente es su n-ésima variable.
+  const fill = (text, type) => {
+    const positions = [...String(text).matchAll(/{{(\d+)}}/g)].map((match) => Number(match[1])).sort((a, b) => a - b);
+    return String(text).replace(/{{(\d+)}}/g, (match, position) => values.get(`${type}:${positions.indexOf(Number(position))}`) ?? match);
+  };
+  return {
+    ...(header?.text ? { header: fill(header.text, 'header') } : {}),
+    body: fill(body.text, 'body'),
+    ...(footer?.text ? { footer: footer.text } : {}),
+    options: replies.map((button) => ({ title: String(button.text || '').trim() })).filter((option) => option.title),
+  };
+};
+
 // Variables de plantilla que salen de un recordatorio (nombre, productos, fecha acordada).
 const REMINDER_SOURCES = ['reminder.name', 'reminder.products', 'reminder.agreed_date', 'fixed'];
 exports.REMINDER_SOURCES = REMINDER_SOURCES;

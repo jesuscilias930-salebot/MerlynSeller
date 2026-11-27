@@ -347,6 +347,31 @@ exports.queueOptions = async (organizationId, conversationId, input) => {
   return { id: result.rows[0].id, status: 'pending', type: 'interactive', format: data.format };
 };
 
+/**
+ * Plantilla con botones enviada como mensaje interactivo (gratis dentro de las 24 h). Guarda el templateId:
+ * las respuestas a sus botones las atienden los escenarios de esa plantilla, igual que con la plantilla.
+ * Devuelve null si la plantilla no se puede convertir (el llamador decide qué mandar).
+ */
+exports.queueTemplateAsOptions = async (organizationId, conversationId, templateId) => {
+  const templates = require('./whatsapp-template.service');
+  const row = (await db.query("SELECT * FROM whatsapp_templates WHERE id=$1 AND organization_id=$2 AND status='APPROVED'", [templateId, organizationId])).rows[0];
+  if (!row) return null;
+  const contact = (await db.query('SELECT ct.name, ct.phone_number FROM conversations c JOIN contacts ct ON ct.id=c.contact_id WHERE c.id=$1 AND c.organization_id=$2', [conversationId, organizationId])).rows[0];
+  if (!contact) return null;
+  let rendered;
+  try { rendered = templates.renderAsOptions(row, contact); } catch { return null; }
+  if (!rendered) return null;
+  let data;
+  try { data = interactiveOptions.normalize({ ...rendered, format: 'auto' }); } catch { return null; }
+  const result = await db.query(
+    "INSERT INTO messages (organization_id, conversation_id, direction, type, body, status) SELECT $1, id, 'outbound', 'interactive', $3, 'pending' FROM conversations WHERE id=$2 AND organization_id=$1 RETURNING id",
+    [organizationId, conversationId, JSON.stringify({ kind: 'options', ...data, templateId: row.id, templateName: row.name })],
+  );
+  if (!result.rows[0]) return null;
+  await outboundQueue().add('send-options', { messageId: result.rows[0].id }, { jobId: result.rows[0].id });
+  return { id: result.rows[0].id, status: 'pending', type: 'interactive', format: data.format };
+};
+
 exports.queueTemplate = async (organizationId, conversationId, input) => {
   const data = validation(templateMessageSchema, input);
   const templates = require('./whatsapp-template.service');

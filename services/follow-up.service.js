@@ -17,8 +17,11 @@ const stepSchema = z.object({
   videoId: z.string().uuid().nullable().optional().transform((value) => value || undefined),
   // Para cuando ya pasaron las 24 h: WhatsApp solo permite plantillas aprobadas.
   templateId: z.string().uuid().nullable().optional().transform((value) => value || undefined),
+  // Dentro de las 24 h: mandar la plantilla como mensaje con sus mismos botones (gratis) en lugar del mensaje libre.
+  templateInWindow: z.boolean().optional().transform((value) => value || undefined),
 }).superRefine((step, ctx) => {
   if (!step.text && !step.imageIds.length && !step.videoId && !step.templateId) ctx.addIssue({ code: 'custom', message: 'Cada paso necesita un mensaje, fotos, un video o una plantilla.' });
+  if (step.templateInWindow && !step.templateId) ctx.addIssue({ code: 'custom', message: 'Elige la plantilla que se enviará con sus botones dentro de las 24 h.' });
 });
 const sequenceSchema = z.object({
   isActive: z.boolean().default(false),
@@ -110,7 +113,7 @@ exports.decide = ({ step, lastOutAt, lastInAt, fromAd = false, channel = 'whatsa
   if (require('./remarketing-schedule.service').isQuietAt(schedule, localMinutes(now, timezone))) return { action: 'wait', reason: 'quiet_hours', dueAt };
   const sinceInbound = lastInAt ? now - new Date(lastInAt) : Infinity;
   const freeWindow = channel === 'whatsapp' ? 24 * HOUR : (fromAd ? 7 * 24 : 24) * HOUR;
-  const hasContent = Boolean(step.text || step.imageIds?.length || step.videoId);
+  const hasContent = Boolean(step.text || step.imageIds?.length || step.videoId || (step.templateInWindow && step.templateId && channel === 'whatsapp'));
   if (sinceInbound < freeWindow && hasContent) return { action: 'send' };
   if (channel === 'whatsapp' && step.templateId) return { action: 'template' };
   return { action: 'stop', reason: channel === 'whatsapp' ? 'Pasaron más de 24 h y el paso no tiene plantilla aprobada.' : 'Messenger e Instagram solo permiten escribir dentro de las 24 h.' };
@@ -119,6 +122,15 @@ exports.decide = ({ step, lastOutAt, lastInAt, fromAd = false, channel = 'whatsa
 const sendStep = async (organizationId, conversationId, step, action) => {
   const conversations = require('./conversation.service');
   if (action === 'template') return conversations.queueTemplate(organizationId, conversationId, { templateId: step.templateId });
+  if (step.templateInWindow && step.templateId) {
+    // Fotos/video primero; la plantilla con botones al final para que sea lo último que vea el cliente.
+    if (step.imageIds?.length) await conversations.queueEntrepreneurPackages(organizationId, conversationId, { imageIds: step.imageIds });
+    if (step.videoId) await require('./video-reuse.service').queueSaved(organizationId, conversationId, { videoId: step.videoId });
+    if (await conversations.queueTemplateAsOptions(organizationId, conversationId, step.templateId)) return;
+    // No se pudo convertir (p. ej. botones de enlace): el mensaje libre si hay; si no, la plantilla.
+    if (step.text) return conversations.queueText(organizationId, conversationId, { body: step.text });
+    return conversations.queueTemplate(organizationId, conversationId, { templateId: step.templateId });
+  }
   const caption = step.text && step.text.length <= 1024 ? step.text : undefined;
   if (step.text && !caption) await conversations.queueText(organizationId, conversationId, { body: step.text });
   if (!step.imageIds?.length && !step.videoId) {

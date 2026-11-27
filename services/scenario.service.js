@@ -1111,7 +1111,7 @@ exports.templateReplyContext = async (organizationId, conversationId, message) =
   };
   if (message?.context?.id) {
     const replied = await db.query(
-      "SELECT id, body FROM messages WHERE organization_id=$1 AND conversation_id=$2 AND provider_message_id=$3 AND direction='outbound' AND type='template'",
+      "SELECT id, body FROM messages WHERE organization_id=$1 AND conversation_id=$2 AND provider_message_id=$3 AND direction='outbound' AND type IN ('template', 'interactive')",
       [organizationId, conversationId, message.context.id],
     );
     if (replied.rows[0]) return parseTemplate(replied.rows[0]);
@@ -1126,7 +1126,8 @@ exports.templateReplyContext = async (organizationId, conversationId, message) =
     [organizationId, conversationId, message.id],
   );
   const row = previous.rows[0];
-  if (!row || row.direction !== "outbound" || row.type !== "template" || row.status === "failed") return null;
+  // Plantilla, o plantilla enviada gratis como mensaje con botones (interactive con templateId).
+  if (!row || row.direction !== "outbound" || !["template", "interactive"].includes(row.type) || row.status === "failed") return null;
   if (Date.now() - new Date(row.created_at).getTime() > 7 * 24 * 3600 * 1000) return null;
   return parseTemplate(row);
 };
