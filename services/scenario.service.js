@@ -155,6 +155,8 @@ const scenarioSchema = z
       .nullable()
       .optional()
       .transform((value) => (value === undefined ? undefined : value || null)),
+    // Dashboard al que pertenece (para verlo desde ese dashboard). Vacío = ninguno en particular.
+    boardId: z.string().uuid().nullable().optional(),
   })
   .superRefine((value, ctx) => {
     if (!value.templateTrigger && !value.triggerExamples.length)
@@ -306,6 +308,7 @@ const toRow = (row) => ({
   quoteBundle: row.quoteBundle || null,
   templateTrigger: row.templateTrigger || null,
   campaign: row.campaign || null,
+  boardId: row.boardId || null,
 });
 const slug = (name) =>
   normalize(name)
@@ -315,6 +318,14 @@ const slug = (name) =>
 
 // La plantilla debe ser de este negocio; su nombre se toma de la base, no del navegador.
 const withTemplateName = async (organizationId, value) => {
+  if (value.boardId) {
+    const board = await db.query("SELECT id FROM lead_boards WHERE id=$1 AND organization_id=$2", [value.boardId, organizationId]);
+    if (!board.rows[0]) {
+      const error = new Error("El dashboard elegido ya no existe.");
+      error.status = 400;
+      throw error;
+    }
+  }
   if (!value.templateTrigger) return value;
   const template = (await db.query("SELECT name FROM whatsapp_templates WHERE id=$1 AND organization_id=$2", [value.templateTrigger.templateId, organizationId])).rows[0];
   if (!template) {
@@ -328,7 +339,7 @@ const withTemplateName = async (organizationId, value) => {
 exports.list = async (organizationId) =>
   (
     await db.query(
-      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY position ASC, created_at ASC',
+      'SELECT id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",config->>\'boardId\' AS "boardId",updated_at AS "updatedAt" FROM automation_scenarios WHERE organization_id=$1 ORDER BY position ASC, created_at ASC',
       [organizationId],
     )
   ).rows.map(toRow);
@@ -340,7 +351,7 @@ exports.create = async (organizationId, input) => {
     const key = suffix ? `${base}_${suffix + 1}` : base;
     try {
       const result = await db.query(
-        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,ai_description,priority,can_interrupt,position,steps,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$1),0),$9,jsonb_build_object(\'quoteBundle\',$10::jsonb,\'templateTrigger\',$11::jsonb,\'campaign\',$12::text)) RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",updated_at AS "updatedAt"',
+        'INSERT INTO automation_scenarios (organization_id,key,name,is_active,trigger_examples,ai_description,priority,can_interrupt,position,steps,config) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM automation_scenarios WHERE organization_id=$1),0),$9,jsonb_build_object(\'quoteBundle\',$10::jsonb,\'templateTrigger\',$11::jsonb,\'campaign\',$12::text,\'boardId\',$13::text)) RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",config->>\'boardId\' AS "boardId",updated_at AS "updatedAt"',
         [
           organizationId,
           key,
@@ -354,6 +365,7 @@ exports.create = async (organizationId, input) => {
           JSON.stringify(value.quoteBundle || null),
           JSON.stringify(value.templateTrigger || null),
           value.campaign || null,
+          value.boardId || null,
         ],
       );
       return toRow(result.rows[0]);
@@ -368,7 +380,7 @@ exports.create = async (organizationId, input) => {
 exports.update = async (organizationId, id, input) => {
   const value = await withTemplateName(organizationId, parse(input));
   const result = await db.query(
-    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=COALESCE(CASE WHEN $10::boolean THEN COALESCE(config,\'{}\'::jsonb) || jsonb_build_object(\'quoteBundle\',$11::jsonb) ELSE config END,\'{}\'::jsonb) || CASE WHEN $12::boolean THEN jsonb_build_object(\'templateTrigger\',$13::jsonb) ELSE \'{}\'::jsonb END || CASE WHEN $14::boolean THEN jsonb_build_object(\'campaign\',$15::text) ELSE \'{}\'::jsonb END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",updated_at AS "updatedAt"',
+    'UPDATE automation_scenarios SET name=$3,is_active=$4,trigger_examples=$5,ai_description=$6,priority=$7,can_interrupt=$8,steps=$9,config=COALESCE(CASE WHEN $10::boolean THEN COALESCE(config,\'{}\'::jsonb) || jsonb_build_object(\'quoteBundle\',$11::jsonb) ELSE config END,\'{}\'::jsonb) || CASE WHEN $12::boolean THEN jsonb_build_object(\'templateTrigger\',$13::jsonb) ELSE \'{}\'::jsonb END || CASE WHEN $14::boolean THEN jsonb_build_object(\'campaign\',$15::text) ELSE \'{}\'::jsonb END || CASE WHEN $16::boolean THEN jsonb_build_object(\'boardId\',$17::text) ELSE \'{}\'::jsonb END,updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",config->>\'boardId\' AS "boardId",updated_at AS "updatedAt"',
     [
       id,
       organizationId,
@@ -387,6 +399,8 @@ exports.update = async (organizationId, id, input) => {
       JSON.stringify(value.templateTrigger || null),
       value.campaign !== undefined,
       value.campaign || null,
+      value.boardId !== undefined,
+      value.boardId || null,
     ],
   );
   if (!result.rows[0]) {
@@ -463,6 +477,7 @@ exports.duplicate = async (organizationId, id) => {
     quoteBundle: source.quoteBundle || null,
     templateTrigger: source.templateTrigger || null,
     campaign: source.campaign || null,
+    boardId: source.boardId || null,
   });
   const order = all.map((scenario) => scenario.id);
   order.splice(order.indexOf(source.id) + 1, 0, created.id);

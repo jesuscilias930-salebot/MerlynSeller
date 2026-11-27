@@ -5,8 +5,8 @@ const scenarios = require('./scenario.service');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
 // Igual que scenario.service.list (mismas columnas, orden y normalización): la revisión debe coincidir.
-const projection = 'id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",updated_at AS "updatedAt"';
-const normalized = row => row && ({ ...row, triggerExamples: row.triggerExamples || [], steps: row.steps || [], quoteBundle: row.quoteBundle || null, templateTrigger: row.templateTrigger || null, campaign: row.campaign || null });
+const projection = 'id,key,name,is_active AS "isActive",trigger_examples AS "triggerExamples",ai_description AS "aiDescription",priority,can_interrupt AS "canInterrupt",position,steps,config->\'quoteBundle\' AS "quoteBundle",config->\'templateTrigger\' AS "templateTrigger",config->>\'campaign\' AS "campaign",config->>\'boardId\' AS "boardId",updated_at AS "updatedAt"';
+const normalized = row => row && ({ ...row, triggerExamples: row.triggerExamples || [], steps: row.steps || [], quoteBundle: row.quoteBundle || null, templateTrigger: row.templateTrigger || null, campaign: row.campaign || null, boardId: row.boardId || null });
 const revision = row => hash(JSON.stringify(row));
 
 exports.issue = async auth => {
@@ -121,7 +121,7 @@ exports.save = async (organizationId, input) => {
       ? { ...shape.data.definition, templateTrigger: current.templateTrigger } : shape.data.definition;
     const definition = await exports.validate(organizationId, input, client);
     // Sin quoteBundle en la definición se conserva el actual, así que no cuenta como cambio.
-    const comparable = { ...definition, ...(definition.quoteBundle === undefined && current ? { quoteBundle: editable(current).quoteBundle } : {}), ...(definition.templateTrigger === undefined && current ? { templateTrigger: editable(current).templateTrigger } : {}), ...(definition.campaign === undefined && current ? { campaign: editable(current).campaign } : {}) };
+    const comparable = { ...definition, ...(definition.quoteBundle === undefined && current ? { quoteBundle: editable(current).quoteBundle } : {}), ...(definition.templateTrigger === undefined && current ? { templateTrigger: editable(current).templateTrigger } : {}), ...(definition.campaign === undefined && current ? { campaign: editable(current).campaign } : {}), ...(definition.boardId === undefined && current ? { boardId: editable(current).boardId } : {}) };
     if (current && JSON.stringify(editable(current)) === JSON.stringify(comparable)) return { ...current, revision: revision(current) };
     if (current && (!expectedRevision || revision(current) !== expectedRevision)) fail(409, 'El escenario cambió. Consulta su versión actual antes de guardarlo');
     if (!current && expectedRevision) fail(404, 'Escenario no encontrado en tu negocio');

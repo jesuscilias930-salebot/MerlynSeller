@@ -113,3 +113,11 @@ test('si un escenario de plantilla atendió la respuesta, processIncoming lo rep
     assert.deepEqual(handled, { templateScenario: false });
   });
 });
+
+test('dashboard del escenario: uuid opcional; omitirlo lo conserva', () => {
+  const base = { name: 'CE120 · Envío', triggerExamples: ['envio'], steps: steps('Va') };
+  assert.equal(scenarios.parseDefinition({ ...base, boardId: TPL }).boardId, TPL);
+  assert.equal(scenarios.parseDefinition({ ...base, boardId: null }).boardId, null);
+  assert.equal(scenarios.parseDefinition(base).boardId, undefined);
+  assert.throws(() => scenarios.parseDefinition({ ...base, boardId: 'x' }));
+});
