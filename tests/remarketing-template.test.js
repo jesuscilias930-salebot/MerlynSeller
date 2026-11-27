@@ -4,6 +4,8 @@ const db = require('../lib/db');
 const queue = require('../lib/queue');
 const realtime = require('../lib/realtime');
 const remarketing = require('../services/remarketing.service');
+// Sin horario de pausa en estas pruebas: los envíos salen al momento.
+require('../services/remarketing-schedule.service').deferUntil = async () => null;
 
 const columnId = '22222222-2222-4222-8222-222222222222';
 const templateId = '44444444-4444-4444-8444-444444444444';

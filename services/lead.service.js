@@ -54,7 +54,7 @@ exports.initialColumnId = async (client, organizationId) => {
 };
 
 // Pendiente de respuesta y no leídos (mismas reglas que el inbox): lo anterior a nuestra respuesta no cuenta.
-const LAST_ANSWER = `COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status <> 'failed' AND answer.deleted_at IS NULL), '-infinity'::timestamptz)`;
+const LAST_ANSWER = `COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status NOT IN ('failed', 'scheduled') AND answer.deleted_at IS NULL), '-infinity'::timestamptz)`;
 const NEEDS_RESPONSE = `(c.status = 'open' AND EXISTS (SELECT 1 FROM messages pending WHERE pending.conversation_id = c.id AND pending.direction = 'inbound' AND pending.created_at > ${LAST_ANSWER}))`;
 const UNREAD_COUNT = `(SELECT COUNT(*)::int FROM messages m
   WHERE m.conversation_id = c.id AND m.direction = 'inbound'

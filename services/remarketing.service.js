@@ -87,6 +87,8 @@ exports.removePreset = async (organizationId, presetId) => {
 
 exports.queueCampaign = async (organizationId, input) => {
   const data = validate(input);
+  // En el horario de pausa (si así se configuró) los mensajes quedan programados para la hora de reanudar.
+  const scheduledFor = await require('./remarketing-schedule.service').deferUntil(organizationId);
   const result = await db.transaction(async (client) => {
     const column = await client.query(
       'SELECT id, name FROM lead_columns WHERE id = $1 AND organization_id = $2',
@@ -129,8 +131,8 @@ exports.queueCampaign = async (organizationId, input) => {
     const inserted = [];
     for (const conversation of eligible.rows) {
       const message = await client.query(`
-        INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status, remarketing_campaign_id)
-        VALUES ($1, $2, 'outbound', $3, $4, $5, 'pending', $6)
+        INSERT INTO messages (organization_id, conversation_id, direction, type, body, media_id, status, remarketing_campaign_id, scheduled_for)
+        VALUES ($1, $2, 'outbound', $3, $4, $5, $7, $6, $8)
         RETURNING id
       `, [
         organizationId,
@@ -139,6 +141,8 @@ exports.queueCampaign = async (organizationId, input) => {
         data.body || null,
         data.mediaId || null,
         campaign.rows[0].id,
+        scheduledFor ? 'scheduled' : 'pending',
+        scheduledFor,
       ]);
       inserted.push(message.rows[0].id);
     }
@@ -152,13 +156,14 @@ exports.queueCampaign = async (organizationId, input) => {
     };
   });
 
-  await Promise.all(result.messageIds.map((messageId) => outboundQueue().add(
+  if (!scheduledFor) await Promise.all(result.messageIds.map((messageId) => outboundQueue().add(
     'send-remarketing',
     { messageId },
     { jobId: messageId },
   )));
+  if (scheduledFor) result.scheduledFor = scheduledFor.toISOString();
   await realtime.publish(organizationId, 'remarketing.queued');
-  return { campaignId: result.campaignId, queued: result.queued, skipped: result.skipped, scenariosEnabled: result.scenariosEnabled };
+  return { campaignId: result.campaignId, queued: result.queued, skipped: result.skipped, scenariosEnabled: result.scenariosEnabled, ...(result.scheduledFor ? { scheduledFor: result.scheduledFor } : {}) };
 };
 
 /** Mensaje libre: cuántos leads de la columna tienen la ventana de 24 h abierta. */
@@ -215,6 +220,7 @@ exports.queueTemplateCampaign = async (organizationId, input) => {
   if (!parsed.success) fail(400, parsed.error.issues[0].message);
   const { columnId, templateId, manualValues, enableScenarios } = parsed.data;
   const templates = require('./whatsapp-template.service');
+  const scheduledFor = await require('./remarketing-schedule.service').deferUntil(organizationId);
   const result = await db.transaction(async (client) => {
     const column = await client.query('SELECT id FROM lead_columns WHERE id = $1 AND organization_id = $2', [columnId, organizationId]);
     if (!column.rows[0]) fail(404, 'La columna no existe');
@@ -247,16 +253,16 @@ exports.queueTemplateCampaign = async (organizationId, input) => {
     const messageIds = [];
     for (const item of prepared) {
       const message = await client.query(`
-        INSERT INTO messages (organization_id, conversation_id, direction, type, body, status, remarketing_campaign_id)
-        VALUES ($1, $2, 'outbound', 'template', $3, 'pending', $4) RETURNING id
-      `, [organizationId, item.conversationId, item.body, campaign.rows[0].id]);
+        INSERT INTO messages (organization_id, conversation_id, direction, type, body, status, remarketing_campaign_id, scheduled_for)
+        VALUES ($1, $2, 'outbound', 'template', $3, $5, $4, $6) RETURNING id
+      `, [organizationId, item.conversationId, item.body, campaign.rows[0].id, scheduledFor ? 'scheduled' : 'pending', scheduledFor]);
       messageIds.push(message.rows[0].id);
     }
     return { campaignId: campaign.rows[0].id, messageIds, skipped: { otherChannel: summary.otherChannel, recent: summary.recent, overLimit: summary.overLimit, missingData }, firstProblem, scenariosEnabled };
   });
-  await Promise.all(result.messageIds.map((messageId) => require('../lib/queue').outboundQueue().add('send-remarketing-template', { messageId }, { jobId: messageId })));
+  if (!scheduledFor) await Promise.all(result.messageIds.map((messageId) => require('../lib/queue').outboundQueue().add('send-remarketing-template', { messageId }, { jobId: messageId })));
   await realtime.publish(organizationId, 'remarketing.queued');
-  return { campaignId: result.campaignId, queued: result.messageIds.length, skipped: result.skipped, scenariosEnabled: result.scenariosEnabled, ...(result.skipped.missingData ? { warning: result.firstProblem } : {}) };
+  return { campaignId: result.campaignId, queued: result.messageIds.length, ...(scheduledFor ? { scheduledFor: scheduledFor.toISOString() } : {}), skipped: result.skipped, scenariosEnabled: result.scenariosEnabled, ...(result.skipped.missingData ? { warning: result.firstProblem } : {}) };
 };
 
 // ---- Respuestas a plantillas que quedaron sin atender ----

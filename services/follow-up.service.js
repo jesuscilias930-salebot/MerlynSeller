@@ -90,8 +90,9 @@ exports.remove = async (organizationId, columnId) => {
 };
 
 // ——— Decisión de cada chat (pura, para probarla) ———
-const localHour = (date, timezone) => Number(new Intl.DateTimeFormat('en-US', { timeZone: timezone, hour: '2-digit', hourCycle: 'h23' }).format(date));
-exports.QUIET = { from: 21, to: 9 };
+const localMinutes = (date, timezone) => require('./business-hours.service').localParts(date, timezone).minutes;
+// Horario de pausa del remarketing automático (configurable en Remarketing); sin configurar, 9 p. m. a 9 a. m.
+exports.QUIET = { isActive: true, pauseAt: '21:00', resumeAt: '09:00' };
 /**
  * ¿Qué hacer ahora con este chat?
  * - wait: aún no toca (espera, horario nocturno o hay un mensaje nuestro en cola).
@@ -101,13 +102,12 @@ exports.QUIET = { from: 21, to: 9 };
  * - template: fuera de la ventana, con plantilla aprobada.
  * - stop: fuera de la ventana y sin plantilla (o canal sin plantillas).
  */
-exports.decide = ({ step, lastOutAt, lastInAt, fromAd = false, channel = 'whatsapp', now = new Date(), timezone = 'America/Mexico_City', outboundQueued = false }) => {
+exports.decide = ({ step, lastOutAt, lastInAt, fromAd = false, channel = 'whatsapp', now = new Date(), timezone = 'America/Mexico_City', outboundQueued = false, schedule = exports.QUIET }) => {
   if (!step) return { action: 'complete' };
   if (outboundQueued) return { action: 'wait', reason: 'queued' };
   const dueAt = new Date(new Date(lastOutAt).getTime() + step.waitMinutes * 60000);
   if (now < dueAt) return { action: 'wait', reason: 'not_due', dueAt };
-  const hour = localHour(now, timezone);
-  if (hour >= exports.QUIET.from || hour < exports.QUIET.to) return { action: 'wait', reason: 'quiet_hours', dueAt };
+  if (require('./remarketing-schedule.service').isQuietAt(schedule, localMinutes(now, timezone))) return { action: 'wait', reason: 'quiet_hours', dueAt };
   const sinceInbound = lastInAt ? now - new Date(lastInAt) : Infinity;
   const freeWindow = channel === 'whatsapp' ? 24 * HOUR : (fromAd ? 7 * 24 : 24) * HOUR;
   const hasContent = Boolean(step.text || step.imageIds?.length || step.videoId);
@@ -134,7 +134,7 @@ const candidates = () => db.query(`
   SELECT c.id AS conversation_id, c.organization_id, s.id AS sequence_id, s.steps, s.final_column_id,
     ct.channel, latest.direction AS latest_direction, latest.created_at AS last_out_at,
     inbound.created_at AS last_in_at, (inbound.referral IS NOT NULL) AS from_ad,
-    EXISTS (SELECT 1 FROM messages q WHERE q.conversation_id = c.id AND q.direction = 'outbound' AND q.status IN ('pending', 'processing') AND q.deleted_at IS NULL) AS outbound_queued,
+    EXISTS (SELECT 1 FROM messages q WHERE q.conversation_id = c.id AND q.direction = 'outbound' AND q.status IN ('pending', 'processing', 'scheduled') AND q.deleted_at IS NULL) AS outbound_queued,
     f.sequence_id AS state_sequence_id, f.cycle_inbound_at, f.step_index, f.status AS state_status
   FROM follow_up_sequences s
   JOIN conversations c ON c.lead_column_id = s.column_id AND c.organization_id = s.organization_id
@@ -158,6 +158,11 @@ exports.run = async (now = new Date()) => {
       if (!timezones.has(organizationId)) timezones.set(organizationId, (await require('./business-hours.service').get(organizationId)).timezone || 'America/Mexico_City');
       return timezones.get(organizationId);
     };
+    const schedules = new Map();
+    const scheduleOf = async (organizationId) => {
+      if (!schedules.has(organizationId)) schedules.set(organizationId, await require('./remarketing-schedule.service').get(organizationId));
+      return schedules.get(organizationId);
+    };
     for (const item of (await candidates()).rows) {
       try {
         const cycle = item.last_in_at ? new Date(item.last_in_at).toISOString() : null;
@@ -171,7 +176,7 @@ exports.run = async (now = new Date()) => {
         } else if (item.state_status !== 'active') continue;
         const stepIndex = sameCycle ? item.step_index : 0;
         const step = (item.steps || [])[stepIndex];
-        const decision = exports.decide({ step, lastOutAt: item.last_out_at, lastInAt: item.last_in_at, fromAd: item.from_ad, channel: item.channel || 'whatsapp', now, timezone: await timezoneOf(item.organization_id), outboundQueued: item.outbound_queued });
+        const decision = exports.decide({ step, lastOutAt: item.last_out_at, lastInAt: item.last_in_at, fromAd: item.from_ad, channel: item.channel || 'whatsapp', now, timezone: await timezoneOf(item.organization_id), outboundQueued: item.outbound_queued , schedule: await scheduleOf(item.organization_id) });
         if (decision.action === 'wait') continue;
         if (decision.action === 'complete') { await db.query("UPDATE conversation_follow_ups SET status='completed', updated_at=now() WHERE conversation_id=$1", [item.conversation_id]); continue; }
         if (decision.action === 'stop') { await db.query("UPDATE conversation_follow_ups SET status='stopped', stopped_reason=$2, updated_at=now() WHERE conversation_id=$1 AND status='active'", [item.conversation_id, decision.reason]); continue; }

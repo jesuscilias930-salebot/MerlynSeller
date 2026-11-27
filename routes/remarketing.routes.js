@@ -14,6 +14,8 @@ router.get('/template-campaigns/preview', controller.previewTemplate);
 router.post('/template-campaigns', controller.sendTemplate);
 router.get('/template-replies/pending', controller.pendingTemplateReplies);
 router.post('/template-replies/reprocess', controller.reprocessTemplateReplies);
+router.get('/schedule', async (req, res, next) => { try { return res.json(await require('../services/remarketing-schedule.service').get(req.auth.organizationId)); } catch (error) { return error.status ? res.status(error.status).json({ error: error.message }) : next(error); } });
+router.put('/schedule', async (req, res, next) => { try { return res.json(await require('../services/remarketing-schedule.service').save(req.auth.organizationId, req.body)); } catch (error) { return error.status ? res.status(error.status).json({ error: error.message }) : next(error); } });
 router.get('/move-rules', controller.listMoveRules);
 router.put('/move-rules', controller.saveMoveRule);
 

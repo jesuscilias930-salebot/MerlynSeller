@@ -69,13 +69,13 @@ exports.list = async (organizationId, userId) => (await db.query(`
     latest.created_at AS "lastMessageAt",
     latest.direction AS "lastDirection",
     (c.status = 'open' AND EXISTS (SELECT 1 FROM messages pending WHERE pending.conversation_id = c.id AND pending.direction = 'inbound'
-      AND pending.created_at > COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status <> 'failed' AND answer.deleted_at IS NULL), '-infinity'::timestamptz))) AS "needsResponse",
+      AND pending.created_at > COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status NOT IN ('failed', 'scheduled') AND answer.deleted_at IS NULL), '-infinity'::timestamptz))) AS "needsResponse",
     (SELECT COUNT(*)::int FROM messages m
       WHERE m.conversation_id = c.id
         AND m.direction = 'inbound'
         AND m.created_at > GREATEST(COALESCE((SELECT last_read_at FROM conversation_read_states rs WHERE rs.conversation_id = c.id AND rs.user_id = $2), '-infinity'::timestamptz),
             -- Ya respondido (por una persona o por el CRM): lo anterior a la respuesta no queda pendiente.
-            COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status <> 'failed' AND answer.deleted_at IS NULL), '-infinity'::timestamptz))
+            COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status NOT IN ('failed', 'scheduled') AND answer.deleted_at IS NULL), '-infinity'::timestamptz))
     ) AS "unreadCount"
   FROM conversations c
   JOIN contacts ct ON ct.id = c.contact_id
@@ -94,7 +94,7 @@ exports.messages = async (organizationId, conversationId, userId) => (await db.q
   SELECT m.id, m.direction, m.type, m.body, m.media_id, m.filename,
     -- Un video que lleva más de 15 min «preparándose» se interrumpió (p. ej. reinicio del servidor).
     CASE WHEN m.status = 'processing' AND m.created_at < now() - interval '15 minutes' THEN 'failed' ELSE m.status END AS status,
-    CASE WHEN m.status = 'processing' AND m.created_at < now() - interval '15 minutes' THEN 'Se interrumpió la preparación del video. Envíalo de nuevo.' ELSE m.error_code END AS error_code, m.provider_message_id, m.referral, m.message_metadata AS "messageMetadata", m.created_at,
+    CASE WHEN m.status = 'processing' AND m.created_at < now() - interval '15 minutes' THEN 'Se interrumpió la preparación del video. Envíalo de nuevo.' WHEN m.error_code = 'cancelled_customer_replied' THEN 'No se envió: el cliente escribió antes de la hora programada.' ELSE m.error_code END AS error_code, m.scheduled_for AS "scheduledFor", m.provider_message_id, m.referral, m.message_metadata AS "messageMetadata", m.created_at,
     (m.deleted_at IS NOT NULL) AS "deletedForEveryone",
     m.reply_to_message_id AS "replyToMessageId", replied.body AS "replyToBody", replied.type AS "replyToType", replied.direction AS "replyToDirection",
     (replied.media_id IS NOT NULL AND replied.deleted_at IS NULL) AS "replyToHasMedia", replied.filename AS "replyToFilename",

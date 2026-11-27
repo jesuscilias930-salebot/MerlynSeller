@@ -223,3 +223,11 @@ const checkColumnTimeouts = async () => {
   }
 };
 setInterval(() => { void checkColumnTimeouts(); }, 60_000);
+
+// Remarketing programado (horario de pausa): a la hora de reanudar se envía lo pendiente.
+const remarketingSchedule = require('./services/remarketing-schedule.service');
+const releaseScheduled = async () => {
+  try { await remarketingSchedule.release(); }
+  catch (error) { console.error(JSON.stringify({ level: 'error', message: 'Scheduled remarketing release failed', errorType: error.name, errorMessage: error.message })); }
+};
+setInterval(() => { void releaseScheduled(); }, 60_000);

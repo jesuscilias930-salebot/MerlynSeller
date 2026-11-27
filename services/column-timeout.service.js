@@ -52,7 +52,7 @@ const due = () => db.query(`
     WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
     ORDER BY m.created_at DESC, COALESCE(m.outbound_sequence, 0) DESC LIMIT 1
   ) latest ON true
-  WHERE t.is_active AND latest.direction = 'outbound' AND latest.status NOT IN ('failed', 'pending', 'processing')
+  WHERE t.is_active AND latest.direction = 'outbound' AND latest.status NOT IN ('failed', 'pending', 'processing', 'scheduled')
     AND GREATEST(latest.created_at, c.lead_column_entered_at, t.activated_at) + make_interval(mins => t.wait_minutes) <= now()
   ORDER BY latest.created_at
   LIMIT 500`);

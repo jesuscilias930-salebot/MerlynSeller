@@ -49,7 +49,7 @@ exports.list = async (organizationId, userId) => {
           EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'inbound'
             AND m.created_at > GREATEST(COALESCE((SELECT last_read_at FROM conversation_read_states rs WHERE rs.conversation_id = c.id AND rs.user_id = $2), '-infinity'::timestamptz),
             -- Ya respondido (por una persona o por el CRM): lo anterior a la respuesta no queda pendiente.
-            COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status <> 'failed' AND answer.deleted_at IS NULL), '-infinity'::timestamptz))) AS unread
+            COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status NOT IN ('failed', 'scheduled') AND answer.deleted_at IS NULL), '-infinity'::timestamptz))) AS unread
         FROM conversations c WHERE c.organization_id = $1
       )
       SELECT column_row.id, column_row.name, column_row.position, column_row.board_id AS "boardId",
