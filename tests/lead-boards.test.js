@@ -23,7 +23,7 @@ test('crear un dashboard le pone solo la columna «Primer contacto»', async () 
     const board = await boards.create('org', { name: ' Calcetas · Orizaba ', product: 'Calcetas', zone: 'Orizaba' });
     assert.equal(board.id, boardId);
     const insert = calls.find((call) => call.sql.includes('INSERT INTO lead_boards'));
-    assert.deepEqual(insert.args, ['org', 'Calcetas · Orizaba', 'Calcetas', 'Orizaba']);
+    assert.deepEqual(insert.args, ['org', 'Calcetas · Orizaba', 'Calcetas', 'Orizaba', null]);
     const columns = calls.filter((call) => call.sql.includes('INSERT INTO lead_columns'));
     assert.equal(columns.length, 1);
     assert.match(columns[0].sql, /'Primer contacto', 0/);
@@ -34,7 +34,7 @@ test('crear un dashboard le pone solo la columna «Primer contacto»', async () 
 
 test('borrar un dashboard pasa sus leads a la columna del mismo nombre en el principal', async () => {
   await withDb((sql) => {
-    if (sql.startsWith('SELECT id, is_default FROM lead_boards')) return { rows: [{ id: boardId, is_default: false }] };
+    if (sql.startsWith('SELECT id, is_default, parent_board_id FROM lead_boards')) return { rows: [{ id: boardId, is_default: false, parent_board_id: null }] };
     if (sql.includes('column_row.board_id = $2 AS own')) return { rows: [
       { id: 'p1', name: 'Primer contacto', own: false }, { id: 'p2', name: 'R-HOT', own: false },
       { id: 'o1', name: 'Primer contacto', own: true }, { id: 'o2', name: 'R HOT', own: true }, { id: 'o3', name: 'Solo aquí', own: true },
@@ -48,22 +48,23 @@ test('borrar un dashboard pasa sus leads a la columna del mismo nombre en el pri
     assert.deepEqual(moves, [['o1', 'p1'], ['o2', 'p2'], ['o3', 'p1']]);
     assert.ok(calls.at(-1).sql.startsWith('DELETE FROM lead_boards'));
   });
-  await withDb((sql) => (sql.startsWith('SELECT id, is_default') ? { rows: [{ id: boardId, is_default: true }] } : null), async () => {
+  await withDb((sql) => (sql.startsWith('SELECT id, is_default') ? { rows: [{ id: boardId, is_default: true, parent_board_id: null }] } : null), async () => {
     await assert.rejects(boards.remove('org', boardId), { status: 409, message: 'El dashboard principal no se puede eliminar' });
   });
 });
 
 test('el tablero carga solo los leads del dashboard abierto', async () => {
   await withDb((sql) => {
+    if (sql.includes('parent_board_id = $2')) return { rows: [] };
     if (sql.includes('FROM lead_boards')) return { rows: [{ id: boardId }] };
     if (sql.includes('FROM lead_columns WHERE')) return { rows: [{ id: 'c1', name: 'Nuevos', position: 0, boardId }] };
-    if (sql.includes('WITH ranked')) return { rows: [{ id: 'conv1', lead_column_id: 'c1', total: 1 }] };
+    if (sql.includes('WITH groups')) return { rows: [{ id: 'conv1', lead_column_id: 'c1', total: 1, group_key: 'c1' }] };
     return null;
   }, async (calls) => {
     const columns = await leads.board('org', 'user', boardId);
     assert.equal(columns[0].leads.length, 1);
-    const leadsQuery = calls.find((call) => call.sql.includes('WITH ranked'));
-    assert.deepEqual(leadsQuery.args, ['org', 'user', ['c1'], 0, 20], 'solo las columnas del dashboard, 20 por columna');
+    const leadsQuery = calls.find((call) => call.sql.includes('WITH groups'));
+    assert.deepEqual(leadsQuery.args, ['org', 'user', ['c1'], 0, 20, ['c1']], 'solo las columnas del dashboard, 20 por columna');
     assert.equal(columns[0].leadCount, 1);
   });
 });

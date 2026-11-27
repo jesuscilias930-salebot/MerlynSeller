@@ -11,6 +11,8 @@ const boardSchema = z.object({
   name: z.string().transform((value) => value.trim()).refine((value) => value.length >= 1 && value.length <= 60, 'Escribe un nombre de hasta 60 caracteres'),
   product: optionalText(80),
   zone: optionalText(80),
+  // Dashboard padre (p. ej. «Calcetines» para las campañas de calcetines). null = sin padre; omitido = sin cambio.
+  parentBoardId: z.string().uuid('Elige un dashboard padre válido').nullable().optional(),
 });
 const orderSchema = z.object({ boardIds: z.array(z.string().uuid()).min(1).max(100) });
 const fail = (status, message) => { const error = new Error(message); error.status = status; throw error; };
@@ -20,13 +22,25 @@ const parse = (schema, input) => {
   return parsed.data;
 };
 const uuid = (value) => z.string().uuid().safeParse(value).success;
+/** Un solo nivel: el padre no puede tener padre, el hijo no puede tener hijos y nadie es su propio padre. */
+const checkParent = async (client, organizationId, boardId, parentBoardId) => {
+  if (!parentBoardId) return;
+  if (boardId && parentBoardId === boardId) fail(400, 'Un dashboard no puede ser su propio padre');
+  const parent = (await client.query('SELECT id, name, parent_board_id FROM lead_boards WHERE id=$1 AND organization_id=$2', [parentBoardId, organizationId])).rows[0];
+  if (!parent) fail(404, 'El dashboard padre ya no existe');
+  if (parent.parent_board_id) fail(400, `«${parent.name}» ya es hijo de otro dashboard; elige un dashboard padre`);
+  if (boardId) {
+    const children = await client.query('SELECT 1 FROM lead_boards WHERE parent_board_id=$1 LIMIT 1', [boardId]);
+    if (children.rows[0]) fail(400, 'Este dashboard ya tiene dashboards hijos, así que no puede ser hijo de otro');
+  }
+};
 const duplicate = (error) => { if (error.code === '23505') fail(409, 'Ya existe un dashboard con ese nombre'); throw error; };
 
 /** Dashboards con sus columnas y contadores ligeros (sin cargar los chats). */
 exports.list = async (organizationId, userId) => {
   const [boards, columns] = await Promise.all([
     db.query(
-      'SELECT id, name, product, zone, position, is_default AS "isDefault" FROM lead_boards WHERE organization_id = $1 ORDER BY position, created_at',
+      'SELECT id, name, product, zone, position, is_default AS "isDefault", parent_board_id AS "parentBoardId" FROM lead_boards WHERE organization_id = $1 ORDER BY position, created_at',
       [organizationId],
     ),
     db.query(`
@@ -113,11 +127,12 @@ exports.create = async (organizationId, input) => {
   const data = parse(boardSchema, input);
   const source = parse(sourceSchema, input?.source);
   const board = await db.transaction(async (client) => {
+    await checkParent(client, organizationId, null, data.parentBoardId);
     const created = await client.query(
-      `INSERT INTO lead_boards (organization_id, name, product, zone, position)
-       VALUES ($1, $2, $3, $4, COALESCE((SELECT MAX(position) + 1 FROM lead_boards WHERE organization_id = $1), 0))
-       RETURNING id, name, product, zone, position, is_default AS "isDefault"`,
-      [organizationId, data.name, data.product, data.zone],
+      `INSERT INTO lead_boards (organization_id, name, product, zone, position, parent_board_id)
+       VALUES ($1, $2, $3, $4, COALESCE((SELECT MAX(position) + 1 FROM lead_boards WHERE organization_id = $1), 0), $5)
+       RETURNING id, name, product, zone, position, is_default AS "isDefault", parent_board_id AS "parentBoardId"`,
+      [organizationId, data.name, data.product, data.zone, data.parentBoardId || null],
     ).catch(duplicate);
     const boardId = created.rows[0].id;
     let copied = { columns: 1, timeouts: 0, followUps: 0 };
@@ -160,28 +175,31 @@ exports.moveColumn = async (organizationId, columnId, input) => {
 exports.update = async (organizationId, id, input) => {
   if (!uuid(id)) fail(404, 'Dashboard no encontrado');
   const data = parse(boardSchema, input);
+  if (data.parentBoardId !== undefined) await checkParent(db, organizationId, id, data.parentBoardId);
   const result = await db.query(
-    `UPDATE lead_boards SET name = $3, product = $4, zone = $5, updated_at = now() WHERE id = $1 AND organization_id = $2
-     RETURNING id, name, product, zone, position, is_default AS "isDefault"`,
-    [id, organizationId, data.name, data.product, data.zone],
+    `UPDATE lead_boards SET name = $3, product = $4, zone = $5,
+       parent_board_id = CASE WHEN $6::boolean THEN $7::uuid ELSE parent_board_id END, updated_at = now()
+     WHERE id = $1 AND organization_id = $2
+     RETURNING id, name, product, zone, position, is_default AS "isDefault", parent_board_id AS "parentBoardId"`,
+    [id, organizationId, data.name, data.product, data.zone, data.parentBoardId !== undefined, data.parentBoardId || null],
   ).catch(duplicate);
   if (!result.rows[0]) fail(404, 'Dashboard no encontrado');
   await realtime.publish(organizationId, 'lead.board_updated');
   return result.rows[0];
 };
 
-/** Borra un dashboard: sus leads, reglas y pasos de escenarios pasan al principal
- *  (a la columna con el mismo nombre o, si no existe, a la primera). */
+/** Borra un dashboard: sus leads, reglas y pasos de escenarios pasan a su dashboard padre o, si no
+ *  tiene, al principal (a la columna con el mismo nombre o, si no existe, a la primera). */
 exports.remove = async (organizationId, id) => {
   if (!uuid(id)) fail(404, 'Dashboard no encontrado');
   const result = await db.transaction(async (client) => {
-    const board = await client.query('SELECT id, is_default FROM lead_boards WHERE id = $1 AND organization_id = $2 FOR UPDATE', [id, organizationId]);
+    const board = await client.query('SELECT id, is_default, parent_board_id FROM lead_boards WHERE id = $1 AND organization_id = $2 FOR UPDATE', [id, organizationId]);
     if (!board.rows[0]) fail(404, 'Dashboard no encontrado');
     if (board.rows[0].is_default) fail(409, 'El dashboard principal no se puede eliminar');
     const columns = await client.query(
       `SELECT column_row.id, column_row.name, column_row.board_id = $2 AS own FROM lead_columns column_row JOIN lead_boards board ON board.id = column_row.board_id
-       WHERE column_row.organization_id = $1 AND (column_row.board_id = $2 OR board.is_default) ORDER BY column_row.position, column_row.created_at`,
-      [organizationId, id],
+       WHERE column_row.organization_id = $1 AND (column_row.board_id = $2 OR ($3::uuid IS NULL AND board.is_default) OR column_row.board_id = $3) ORDER BY column_row.position, column_row.created_at`,
+      [organizationId, id, board.rows[0].parent_board_id || null],
     );
     const targets = columns.rows.filter((column) => !column.own);
     if (!targets.length) fail(409, 'El dashboard principal no tiene columnas a donde pasar los leads');

@@ -73,15 +73,26 @@ const pageSize = (value, fallback = LEADS_PAGE) => Math.min(MAX_LEADS_PAGE, Math
  * offset+limit de cada columna y su total con el filtro. Los cálculos pesados (no leídos, último
  * mensaje) solo se hacen para la página, salvo que el filtro los necesite para elegir.
  */
-const columnLeads = async (organizationId, userId, columnIds, { limit = LEADS_PAGE, offset = 0, filter = 'all' } = {}) => {
+const columnLeads = async (organizationId, userId, columnIds, options = {}) =>
+  groupLeads(organizationId, userId, columnIds.map((id) => ({ key: id, columnIds: [id] })), options);
+
+/**
+ * Igual que columnLeads pero por grupos de columnas: cada grupo se pagina junto (p. ej. la columna de
+ * un dashboard hijo en su padre = todas las columnas del hijo).
+ */
+const groupLeads = async (organizationId, userId, groups, { limit = LEADS_PAGE, offset = 0, filter = 'all' } = {}) => {
   const condition = FILTERS[filter] || FILTERS.all;
+  const pairs = groups.flatMap((group) => group.columnIds.map((columnId) => [columnId, group.key]));
+  const keys = groups.map((group) => group.key);
+  if (!pairs.length) return { byColumn: new Map(keys.map((key) => [key, []])), totals: new Map() };
   const result = await db.query(`
-    WITH ranked AS (
-      SELECT c.id, c.lead_column_id,
-        ROW_NUMBER() OVER (PARTITION BY c.lead_column_id ORDER BY c.updated_at DESC, c.id DESC) AS rn,
-        COUNT(*) OVER (PARTITION BY c.lead_column_id)::int AS total
-      FROM conversations c
-      WHERE c.organization_id = $1 AND c.lead_column_id = ANY($3::uuid[]) AND ${condition}
+    WITH groups AS (SELECT * FROM unnest($3::uuid[], $6::text[]) AS g(column_id, group_key)),
+    ranked AS (
+      SELECT c.id, g.group_key,
+        ROW_NUMBER() OVER (PARTITION BY g.group_key ORDER BY c.updated_at DESC, c.id DESC) AS rn,
+        COUNT(*) OVER (PARTITION BY g.group_key)::int AS total
+      FROM conversations c JOIN groups g ON g.column_id = c.lead_column_id
+      WHERE c.organization_id = $1 AND ${condition}
     )
     SELECT
       c.id,
@@ -100,7 +111,8 @@ const columnLeads = async (organizationId, userId, columnIds, { limit = LEADS_PA
       latest.direction AS "lastDirection",
       ${NEEDS_RESPONSE} AS "needsResponse",
       ${UNREAD_COUNT} AS "unreadCount",
-      ranked.total
+      ranked.total,
+      ranked.group_key
     FROM ranked
     JOIN conversations c ON c.id = ranked.id
     JOIN contacts ct ON ct.id = c.contact_id
@@ -108,22 +120,24 @@ const columnLeads = async (organizationId, userId, columnIds, { limit = LEADS_PA
       SELECT body, direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
     ) latest ON true
     WHERE ranked.rn > $4 AND ranked.rn <= $4 + $5
-    ORDER BY ranked.lead_column_id, ranked.rn
-  `, [organizationId, userId, columnIds, offset, limit]);
-  // Total por columna aunque la página venga vacía (se vuelve a contar solo si hace falta).
-  const totals = new Map(result.rows.map((row) => [row.lead_column_id, row.total]));
-  const missing = columnIds.filter((id) => !totals.has(id));
+    ORDER BY ranked.group_key, ranked.rn
+  `, [organizationId, userId, pairs.map((pair) => pair[0]), offset, limit, pairs.map((pair) => pair[1])]);
+  // Total por grupo aunque la página venga vacía (se vuelve a contar solo si hace falta).
+  const totals = new Map(result.rows.map((row) => [row.group_key, row.total]));
+  const missing = pairs.filter((pair) => !totals.has(pair[1]));
   if (missing.length) {
     const counted = await db.query(
-      `SELECT c.lead_column_id, COUNT(*)::int AS total FROM conversations c WHERE c.organization_id = $1 AND c.lead_column_id = ANY($3::uuid[]) AND ${condition} AND $2::uuid IS NOT DISTINCT FROM $2::uuid GROUP BY c.lead_column_id`,
-      [organizationId, userId, missing],
+      `SELECT g.group_key, COUNT(*)::int AS total FROM conversations c JOIN unnest($3::uuid[], $4::text[]) AS g(column_id, group_key) ON g.column_id = c.lead_column_id
+       WHERE c.organization_id = $1 AND ${condition} AND $2::uuid IS NOT DISTINCT FROM $2::uuid GROUP BY g.group_key`,
+      [organizationId, userId, missing.map((pair) => pair[0]), missing.map((pair) => pair[1])],
     );
-    for (const row of counted.rows) totals.set(row.lead_column_id, row.total);
+    for (const row of counted.rows) totals.set(row.group_key, row.total);
   }
-  const byColumn = new Map(columnIds.map((id) => [id, []]));
-  for (const { total, ...lead } of result.rows) byColumn.get(lead.lead_column_id)?.push(lead);
+  const byColumn = new Map(keys.map((key) => [key, []]));
+  for (const { total, group_key: key, ...lead } of result.rows) byColumn.get(key)?.push(lead);
   return { byColumn, totals };
 };
+const CHILD_PREFIX = 'board:';
 
 // Solo se cargan los leads del dashboard abierto y, de cada columna, la primera página (20 por
 // defecto; al refrescar se puede pedir más para no perder lo que ya se desplazó).
@@ -133,15 +147,47 @@ exports.board = async (organizationId, userId, boardId, options = {}) => {
     'SELECT id, name, position, board_id AS "boardId" FROM lead_columns WHERE organization_id = $1 AND board_id = $2 ORDER BY position ASC, created_at ASC',
     [organizationId, resolvedBoardId],
   );
-  const ids = columns.rows.map((column) => column.id);
-  const { byColumn, totals } = ids.length
-    ? await columnLeads(organizationId, userId, ids, { limit: pageSize(options.limit), filter: options.filter })
+  // Dashboard padre: además de sus columnas, una columna por cada dashboard hijo con todos sus leads.
+  const children = (await db.query(
+    `SELECT board.id, board.name, COALESCE(array_agg(column_row.id) FILTER (WHERE column_row.id IS NOT NULL), '{}') AS "columnIds"
+     FROM lead_boards board LEFT JOIN lead_columns column_row ON column_row.board_id = board.id
+     WHERE board.organization_id = $1 AND board.parent_board_id = $2
+     GROUP BY board.id ORDER BY board.position, board.created_at`,
+    [organizationId, resolvedBoardId],
+  )).rows;
+  const groups = [
+    ...columns.rows.map((column) => ({ key: column.id, columnIds: [column.id] })),
+    ...children.map((child) => ({ key: `${CHILD_PREFIX}${child.id}`, columnIds: child.columnIds })),
+  ];
+  const { byColumn, totals } = groups.length
+    ? await groupLeads(organizationId, userId, groups, { limit: pageSize(options.limit), filter: options.filter })
     : { byColumn: new Map(), totals: new Map() };
-  return columns.rows.map((column) => ({ ...column, leads: byColumn.get(column.id) || [], leadCount: totals.get(column.id) || 0 }));
+  return [
+    ...columns.rows.map((column) => ({ ...column, leads: byColumn.get(column.id) || [], leadCount: totals.get(column.id) || 0 })),
+    ...children.map((child, index) => {
+      const key = `${CHILD_PREFIX}${child.id}`;
+      return { id: key, name: child.name, position: columns.rows.length + index, boardId: resolvedBoardId, virtual: true, childBoardId: child.id, leads: byColumn.get(key) || [], leadCount: totals.get(key) || 0 };
+    }),
+  ];
 };
 
 /** Siguiente página de una columna (scroll infinito). */
 exports.columnPage = async (organizationId, userId, columnId, options = {}) => {
+  if (String(columnId).startsWith(CHILD_PREFIX)) {
+    // Columna de un dashboard hijo dentro de su padre: todas las columnas del hijo.
+    const childId = String(columnId).slice(CHILD_PREFIX.length);
+    const child = /^[0-9a-f-]{36}$/i.test(childId)
+      ? (await db.query('SELECT COALESCE(array_agg(column_row.id), \'{}\') AS "columnIds", count(board.id)::int AS found FROM lead_boards board LEFT JOIN lead_columns column_row ON column_row.board_id = board.id WHERE board.id = $1 AND board.organization_id = $2', [childId, organizationId])).rows[0]
+      : null;
+    if (!child?.found) {
+      const error = new Error('El dashboard ya no existe');
+      error.status = 404;
+      throw error;
+    }
+    const offset = Math.max(0, Number.parseInt(options.offset, 10) || 0);
+    const { byColumn, totals } = await groupLeads(organizationId, userId, [{ key: columnId, columnIds: (child.columnIds || []).filter(Boolean) }], { limit: pageSize(options.limit), offset, filter: options.filter });
+    return { leads: byColumn.get(columnId) || [], leadCount: totals.get(columnId) || 0 };
+  }
   const valid = /^[0-9a-f-]{36}$/i.test(String(columnId));
   const column = valid ? await db.query('SELECT id FROM lead_columns WHERE id = $1 AND organization_id = $2', [columnId, organizationId]) : { rows: [] };
   if (!column.rows[0]) {
