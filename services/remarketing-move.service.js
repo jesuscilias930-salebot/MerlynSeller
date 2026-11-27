@@ -4,10 +4,9 @@ const realtime = require('../lib/realtime');
 
 // Remarketing → mover a columna, configurado por plantilla oficial o mensaje guardado.
 //  · Columna del tablero: el mensaje aparece en esa columna para enviarlo desde ahí.
-//  · Al enviarse el mensaje: mueve el lead aunque esté fijado 📌 (p. ej. por una regla de primer contacto)
-//    y le quita el fijado, como si lo movieras a mano.
-//  · Si el lead responde: lo mueve siempre (aunque esté fijado o en otro dashboard) y lo deja fijado.
-//    Solo la primera respuesta a cada campaña. Sin columna configurada se usa R-HOT como antes.
+//  · Al enviarse el mensaje: mueve el lead a la columna «al enviar».
+//  · Si el lead responde: lo mueve (aunque esté en otro dashboard), solo la primera respuesta a cada
+//    campaña. Si un escenario de plantilla atendió la respuesta, manda el escenario y esto no se aplica. Sin columna configurada se usa R-HOT como antes.
 const id = z.string().uuid().nullable().optional().transform((value) => value || null);
 const schema = z.object({ templateId: id, presetId: id, homeColumnId: id, afterSendColumnId: id, onReplyColumnId: id })
   .refine((value) => Boolean(value.templateId) !== Boolean(value.presetId), 'Elige una plantilla o un mensaje guardado');
@@ -97,7 +96,7 @@ exports.onReply = async (organizationId, conversationId, repliedProviderMessageI
   );
   if (!first.rows[0]) return { configured: true, moved: false };
   const moved = await db.query(
-    `UPDATE conversations SET lead_column_id = $3, column_pinned_at = now(), column_pinned_rule_id = NULL, updated_at = now()
+    `UPDATE conversations SET lead_column_id = $3, column_pinned_at = NULL, column_pinned_rule_id = NULL, updated_at = now()
      WHERE id = $1 AND organization_id = $2 RETURNING id`,
     [conversationId, organizationId, campaign.on_reply_column_id],
   );

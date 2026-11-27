@@ -931,8 +931,7 @@ const run = async (
   }
   if (step.type === "move_column" && step.columnId)
     await db.query(
-      // Un lead fijado por una regla de columna se queda donde está.
-      "UPDATE conversations SET lead_column_id=$3,updated_at=now() WHERE id=$1 AND organization_id=$2 AND column_pinned_at IS NULL",
+      "UPDATE conversations SET lead_column_id=$3,updated_at=now() WHERE id=$1 AND organization_id=$2",
       [conversationId, organizationId, step.columnId],
     );
   if (step.nextStepId)

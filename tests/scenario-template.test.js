@@ -101,3 +101,15 @@ test('campaña: se recorta, vacío = sin campaña y omitirla la conserva', () =>
   assert.equal(scenarios.parseDefinition(base).campaign, undefined);
   assert.throws(() => scenarios.parseDefinition({ ...base, campaign: 'x'.repeat(61) }));
 });
+
+test('si un escenario de plantilla atendió la respuesta, processIncoming lo reporta (el remarketing no mueve)', async () => {
+  const rows = [row('caja_si', 0, ['Sí, la quiero'], 'Apartamos tu caja', trigger())];
+  await withDb({ rows, replied: templateRow() }, async () => {
+    const handled = await automations.processIncoming('org', 'conv', { id: 'wamid.9', type: 'button', button: { text: 'Sí, la quiero' }, context: { id: 'wamid.tpl' } });
+    assert.deepEqual(handled, { templateScenario: true });
+  });
+  await withDb({ rows: [], replied: templateRow() }, async () => {
+    const handled = await automations.processIncoming('org', 'conv', { id: 'wamid.10', type: 'button', button: { text: 'Otra cosa' }, context: { id: 'wamid.tpl' } });
+    assert.deepEqual(handled, { templateScenario: false });
+  });
+});

@@ -281,10 +281,10 @@ exports.moveAllFromColumn = async (organizationId, sourceColumnId, input) => {
 // An unmatched customer message should be visible to a human. The column is
 // intentionally looked up by name so each organization retains control of its
 // own pipeline IDs and can still rename/reorder all other columns freely.
-// Movimiento automático: respeta los leads fijados por una regla de columna.
+// Movimiento automático (atención humana, R-HOT…).
 const autoMove = async (organizationId, conversationId, columnId) => {
   const moved = await db.query(
-    'UPDATE conversations SET lead_column_id=$3, updated_at=now() WHERE id=$1 AND organization_id=$2 AND column_pinned_at IS NULL RETURNING id',
+    'UPDATE conversations SET lead_column_id=$3, updated_at=now() WHERE id=$1 AND organization_id=$2 RETURNING id',
     [conversationId, organizationId, columnId],
   );
   if (!moved.rows[0]) return false;

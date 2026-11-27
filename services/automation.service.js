@@ -198,7 +198,8 @@ exports.processIncoming = async (organizationId, conversationId, message, option
   if (templateReply) {
     const result = await scenarios.processTemplateReply(organizationId, conversationId, text, templateReply);
     if (!result.handled) log('info', 'Template reply left for a person', { conversationId, templateId: templateReply.templateId });
-    return;
+    // El escenario de plantilla decide la columna: el remarketing ya no mueve a «si responden».
+    return { templateScenario: Boolean(result.handled) };
   }
   // Respuesta a un mensaje con opciones de un escenario activo: tiene prioridad
   // sobre las reglas generales para no escalar opciones como «500 pares».

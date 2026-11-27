@@ -37,22 +37,23 @@ test('valida la regla y quita frases repetidas', async () => {
   } finally { db.query = original; }
 });
 
-test('al coincidir mueve y fija el lead; las automatizaciones respetan el fijado', async () => {
+test('al coincidir mueve el lead sin fijarlo; las automatizaciones lo pueden mover después', async () => {
   const original = { query: db.query, publish: realtime.publish };
   const calls = [];
   realtime.publish = async () => {};
   db.query = async (sql, args) => {
     calls.push({ sql, args });
     if (sql.includes('FROM column_rules')) return { rows: [rule()] };
-    if (sql.includes('column_pinned_at IS NULL')) return { rows: [] };
+    if (sql.includes('UPDATE conversations SET lead_column_id=$3, updated_at=now()')) return { rows: [{ id: 'conv' }] };
     return { rows: [] };
   };
   try {
     const applied = await rules.applyIncoming('org', 'conv', { text: { body: 'Soy distribuidor' } });
     assert.equal(applied.id, 'r1');
-    const update = calls.find((call) => call.sql.includes('column_pinned_at=now()'));
-    assert.deepEqual(update.args, ['conv', 'org', columnId, 'r1']);
-    assert.equal(await leads.autoMove('org', 'conv', 'otra'), false, 'un lead fijado no se mueve solo');
+    const update = calls.find((call) => call.sql.includes('column_pinned_at=NULL'));
+    assert.deepEqual(update.args, ['conv', 'org', columnId]);
+    assert.ok(!calls.some((call) => call.sql.includes('column_pinned_at=now()')), 'no fija');
+    assert.equal(await leads.autoMove('org', 'conv', 'otra'), true, 'una automatización lo puede mover');
   } finally { db.query = original.query; realtime.publish = original.publish; }
 });
 

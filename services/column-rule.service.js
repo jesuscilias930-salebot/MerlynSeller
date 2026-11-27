@@ -4,8 +4,7 @@ const realtime = require('../lib/realtime');
 const { normalize } = require('./text-match');
 
 // «Si llega este mensaje → mover a esta columna». La primera regla activa que coincide
-// mueve el lead y lo deja fijado; las automatizaciones ya no lo mueven hasta que una
-// persona lo mueva a mano. Una regla puede limitarse a ciertas ladas (p. ej. 272, 55) y,
+// mueve el lead (sin fijarlo: escenarios y automatizaciones lo pueden seguir moviendo). Una regla puede limitarse a ciertas ladas (p. ej. 272, 55) y,
 // si tiene ladas, puede no llevar frases: entonces aplica a cualquier mensaje de esas ladas.
 const phrase = z.string().transform((value) => value.trim().replace(/\s+/g, ' ')).refine((value) => value.length >= 1 && value.length <= 120, 'Cada frase admite de 1 a 120 caracteres');
 const schema = z.object({
@@ -149,9 +148,9 @@ exports.applyIncoming = async (organizationId, conversationId, message) => {
   const rule = matchRule(rules, text, phone);
   if (!rule) return null;
   await db.query(
-    `UPDATE conversations SET lead_column_id=$3, column_pinned_at=now(), column_pinned_rule_id=$4, updated_at=now()
+    `UPDATE conversations SET lead_column_id=$3, column_pinned_at=NULL, column_pinned_rule_id=NULL, updated_at=now()
      WHERE id=$1 AND organization_id=$2`,
-    [conversationId, organizationId, rule.columnId, rule.id],
+    [conversationId, organizationId, rule.columnId],
   );
   await realtime.publish(organizationId, 'lead.moved', conversationId);
   console.log(JSON.stringify({ level: 'info', message: 'Lead moved by column rule', conversationId, ruleId: rule.id, byAreaCode: (rule.areaCodes || []).length > 0 }));

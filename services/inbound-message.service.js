@@ -298,10 +298,10 @@ exports.process = async (payload) => {
           // y una falla aquí nunca impide que el bot responda.
           try { await columnRules.applyIncoming(account.rows[0].organization_id, stored.conversationId, message); }
           catch (error) { console.error(JSON.stringify({ level: 'error', message: 'Column rules failed', conversationId: stored.conversationId, errorMessage: error.message })); }
-          await automations.processIncoming(account.rows[0].organization_id, stored.conversationId, message);
+          const handledBy = await automations.processIncoming(account.rows[0].organization_id, stored.conversationId, message);
           // Keep commercial engagement visible even if the automation also
           // escalates an unmatched message to the human-attention column.
-          if (stored.isMarketingReply) {
+          if (stored.isMarketingReply && !handledBy?.templateScenario) {
             // Columna «si responden» configurada para ese remarketing; si no hay, R-HOT como antes.
             let configured = { configured: false, moved: false };
             try { configured = await remarketingMoves.onReply(account.rows[0].organization_id, stored.conversationId, message.context?.id); }

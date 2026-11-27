@@ -31,7 +31,7 @@ test('guarda la configuración por plantilla y la borra si no hay columnas', asy
   });
 });
 
-test('al responder mueve y fija solo la primera vez; sin configuración avisa para usar R-HOT', async () => {
+test('al responder mueve (sin fijar) solo la primera vez; sin configuración avisa para usar R-HOT', async () => {
   let inserted = true;
   await withDb((sql) => {
     if (sql.includes('JOIN remarketing_campaigns')) return { rows: [{ id: 'camp', on_reply_column_id: col }] };
@@ -41,8 +41,7 @@ test('al responder mueve y fija solo la primera vez; sin configuración avisa pa
   }, async (calls) => {
     assert.deepEqual(await moves.onReply('org', 'conv', null), { configured: true, moved: true });
     const update = calls.find((call) => call.sql.startsWith('UPDATE conversations'));
-    assert.match(update.sql, /column_pinned_at = now\(\)/);
-    assert.doesNotMatch(update.sql, /column_pinned_at IS NULL/, 'se mueve aunque esté fijado');
+    assert.match(update.sql, /column_pinned_at = NULL/, 'ya no fija el lead');
     inserted = false;
     assert.deepEqual(await moves.onReply('org', 'conv', 'wamid.1'), { configured: true, moved: false });
   });
