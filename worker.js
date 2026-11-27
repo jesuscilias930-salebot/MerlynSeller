@@ -211,3 +211,15 @@ const checkFollowUps = async () => {
   }
 };
 setInterval(() => { void checkFollowUps(); }, 60_000);
+
+// ⏳ Sin respuesta → mover de columna (sin enviar mensaje): cada minuto.
+const columnTimeouts = require('./services/column-timeout.service');
+const checkColumnTimeouts = async () => {
+  try {
+    const result = await columnTimeouts.run();
+    if (result.moved) console.log(JSON.stringify({ level: 'info', message: 'Leads moved by column timeouts', count: result.moved }));
+  } catch (error) {
+    console.error(JSON.stringify({ level: 'error', message: 'Column timeout check failed', errorType: error.name, errorMessage: error.message }));
+  }
+};
+setInterval(() => { void checkColumnTimeouts(); }, 60_000);
