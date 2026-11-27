@@ -55,3 +55,33 @@ test('la respuesta a un mensaje con botones de plantilla cuenta como respuesta a
     assert.equal(await scenarios.templateReplyContext('org', 'conv', { id: 'w3' }), null, 'opciones normales (sin plantilla) no cuentan');
   } finally { db.query = original; }
 });
+
+test('📣 con plantilla y «gratis dentro de 24 h»: botones gratis a quien está en la ventana, plantilla al resto', async () => {
+  const remarketing = require('../services/remarketing.service');
+  require('../services/remarketing-schedule.service').deferUntil = async () => null;
+  const queue = require('../lib/queue'); const originalQueue = queue.outboundQueue; queue.outboundQueue = () => ({ add: async () => {} });
+  const realtime = require('../lib/realtime'); const originalPublish = realtime.publish; realtime.publish = async () => {};
+  const original = { transaction: db.transaction };
+  const inserted = [];
+  const client = { query: async (sql, args) => {
+    if (sql.includes('FROM lead_columns WHERE id')) return { rows: [{ id: 'col' }] };
+    if (sql.includes('FROM whatsapp_templates')) return { rows: [template()] };
+    if (sql.includes('FROM conversations c JOIN contacts')) return { rows: [
+      { id: 'reciente', name: 'Ana', phone_number: '521', channel: 'whatsapp', recent: false, lastInboundAt: new Date(Date.now() - 2 * 3600e3).toISOString() },
+      { id: 'viejo', name: 'Luis', phone_number: '522', channel: 'whatsapp', recent: false, lastInboundAt: new Date(Date.now() - 48 * 3600e3).toISOString() },
+    ] };
+    if (sql.includes('remarketing_move_rules')) return { rows: [] };
+    if (sql.includes('INSERT INTO remarketing_campaigns')) return { rows: [{ id: 'camp' }] };
+    if (sql.includes('INSERT INTO messages')) { inserted.push({ conversation: args[1], type: args[6], body: JSON.parse(args[2]) }); return { rows: [{ id: `m-${args[1]}` }] }; }
+    return { rows: [] };
+  } };
+  db.transaction = async (callback) => callback(client);
+  try {
+    const result = await remarketing.queueTemplateCampaign('org', { columnId: '22222222-2222-4222-8222-222222222222', templateId: TPL, freeInWindow: true });
+    assert.equal(result.free, 1);
+    assert.deepEqual(inserted.map((item) => [item.conversation, item.type]), [['reciente', 'interactive'], ['viejo', 'template']]);
+    assert.equal(inserted[0].body.templateId, TPL, 'las respuestas se ligan a la plantilla');
+    assert.equal(inserted[0].body.body, 'Hola Ana 👋 Te escribe Merlyn Mayoreo. ¿Te la apartamos?');
+    assert.deepEqual(inserted[0].body.options.map((option) => option.title), ['Sí, la quiero', 'Tengo una duda', 'Ya no me interesa']);
+  } finally { db.transaction = original.transaction; queue.outboundQueue = originalQueue; realtime.publish = originalPublish; }
+});

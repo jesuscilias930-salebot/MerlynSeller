@@ -187,25 +187,31 @@ const templateCampaignSchema = z.object({
   templateId: z.string().uuid('Elige la plantilla'),
   manualValues: z.record(z.string(), z.string().max(1024)).default({}),
   enableScenarios: z.boolean().default(false),
+  // A quien escribió en las últimas 24 h: la misma plantilla como mensaje con botones (gratis). Al resto, la plantilla.
+  freeInWindow: z.boolean().default(false),
 });
 const MAX_TEMPLATE_RECIPIENTS = () => Math.max(1, Number(process.env.REMARKETING_TEMPLATE_MAX || 1000));
 const fail = (status, message) => { const error = new Error(message); error.status = status; throw error; };
 
 const templateAudience = async (client, organizationId, columnId) => (await client.query(`
   SELECT c.id, ct.name, ct.phone_number, COALESCE(ct.channel, 'whatsapp') AS channel, c.scenario_enabled = false AS "scenariosPaused",
-    EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'outbound' AND m.type = 'template'
-      AND m.remarketing_campaign_id IS NOT NULL AND m.created_at > now() - interval '24 hours') AS recent
+    EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'outbound' AND m.type IN ('template', 'interactive')
+      AND m.remarketing_campaign_id IS NOT NULL AND m.created_at > now() - interval '24 hours') AS recent,
+    (SELECT max(i.created_at) FROM messages i WHERE i.conversation_id = c.id AND i.direction = 'inbound') AS "lastInboundAt"
   FROM conversations c JOIN contacts ct ON ct.id = c.contact_id
   WHERE c.organization_id = $1 AND c.lead_column_id = $2
   ORDER BY c.updated_at DESC
 `, [organizationId, columnId])).rows;
 
 /** Cuántos recibirían la plantilla y por qué se omite al resto. */
+// ¿Seguirá abierta la ventana de 24 h al momento de enviar? Margen de 1 h por si la cola se demora.
+const inWindowAt = (row, at) => Boolean(row.lastInboundAt) && at.getTime() - new Date(row.lastInboundAt).getTime() < 23 * 3600 * 1000;
+exports.inWindowAt = inWindowAt;
 const audienceSummary = (rows) => {
   const whatsapp = rows.filter((row) => row.channel === 'whatsapp');
   const fresh = whatsapp.filter((row) => !row.recent);
   const max = MAX_TEMPLATE_RECIPIENTS();
-  return { total: rows.length, scenariosPaused: rows.filter((row) => row.scenariosPaused).length, eligible: Math.min(fresh.length, max), otherChannel: rows.length - whatsapp.length, recent: whatsapp.length - fresh.length, overLimit: Math.max(0, fresh.length - max), max, recipients: fresh.slice(0, max) };
+  return { total: rows.length, scenariosPaused: rows.filter((row) => row.scenariosPaused).length, eligible: Math.min(fresh.length, max), inWindow: fresh.slice(0, max).filter((row) => inWindowAt(row, new Date())).length, otherChannel: rows.length - whatsapp.length, recent: whatsapp.length - fresh.length, overLimit: Math.max(0, fresh.length - max), max, recipients: fresh.slice(0, max) };
 };
 exports.audienceSummary = audienceSummary;
 
@@ -215,10 +221,17 @@ exports.previewTemplateCampaign = async (organizationId, columnId) => {
   return summary;
 };
 
+const freeOptions = (templates, templateRow, contact, manualValues) => {
+  try {
+    const rendered = templates.renderAsOptions(templateRow, contact, manualValues);
+    return rendered ? require('./interactive-options').normalize({ ...rendered, format: 'auto' }) : null;
+  } catch { return null; }
+};
+
 exports.queueTemplateCampaign = async (organizationId, input) => {
   const parsed = templateCampaignSchema.safeParse(input);
   if (!parsed.success) fail(400, parsed.error.issues[0].message);
-  const { columnId, templateId, manualValues, enableScenarios } = parsed.data;
+  const { columnId, templateId, manualValues, enableScenarios, freeInWindow } = parsed.data;
   const templates = require('./whatsapp-template.service');
   const scheduledFor = await require('./remarketing-schedule.service').deferUntil(organizationId);
   const result = await db.transaction(async (client) => {
@@ -238,7 +251,13 @@ exports.queueTemplateCampaign = async (organizationId, input) => {
     for (const row of summary.recipients) {
       try {
         const components = templates.buildComponents(templateRow, row, manualValues);
-        prepared.push({ conversationId: row.id, body: JSON.stringify({ templateName: templateRow.name, language: templateRow.language, components, templateId: templateRow.id }) });
+        // Dentro de la ventana al momento de salir (si quedó programado, a la hora de reanudar): el mismo mensaje
+        // con sus botones, gratis. Si la plantilla no se puede convertir (botones de enlace, encabezado con
+        // imagen), va la plantilla.
+        const free = freeInWindow && inWindowAt(row, scheduledFor || new Date()) ? freeOptions(templates, templateRow, row, manualValues) : null;
+        prepared.push(free
+          ? { conversationId: row.id, type: 'interactive', body: JSON.stringify({ kind: 'options', ...free, templateId: templateRow.id, templateName: templateRow.name }) }
+          : { conversationId: row.id, type: 'template', body: JSON.stringify({ templateName: templateRow.name, language: templateRow.language, components, templateId: templateRow.id }) });
       } catch (error) {
         if (!error.status) throw error;
         missingData += 1; firstProblem = firstProblem || error.message;
@@ -254,15 +273,15 @@ exports.queueTemplateCampaign = async (organizationId, input) => {
     for (const item of prepared) {
       const message = await client.query(`
         INSERT INTO messages (organization_id, conversation_id, direction, type, body, status, remarketing_campaign_id, scheduled_for)
-        VALUES ($1, $2, 'outbound', 'template', $3, $5, $4, $6) RETURNING id
-      `, [organizationId, item.conversationId, item.body, campaign.rows[0].id, scheduledFor ? 'scheduled' : 'pending', scheduledFor]);
+        VALUES ($1, $2, 'outbound', $7, $3, $5, $4, $6) RETURNING id
+      `, [organizationId, item.conversationId, item.body, campaign.rows[0].id, scheduledFor ? 'scheduled' : 'pending', scheduledFor, item.type]);
       messageIds.push(message.rows[0].id);
     }
-    return { campaignId: campaign.rows[0].id, messageIds, skipped: { otherChannel: summary.otherChannel, recent: summary.recent, overLimit: summary.overLimit, missingData }, firstProblem, scenariosEnabled };
+    return { campaignId: campaign.rows[0].id, messageIds, free: prepared.filter((item) => item.type === 'interactive').length, skipped: { otherChannel: summary.otherChannel, recent: summary.recent, overLimit: summary.overLimit, missingData }, firstProblem, scenariosEnabled };
   });
   if (!scheduledFor) await Promise.all(result.messageIds.map((messageId) => require('../lib/queue').outboundQueue().add('send-remarketing-template', { messageId }, { jobId: messageId })));
   await realtime.publish(organizationId, 'remarketing.queued');
-  return { campaignId: result.campaignId, queued: result.messageIds.length, ...(scheduledFor ? { scheduledFor: scheduledFor.toISOString() } : {}), skipped: result.skipped, scenariosEnabled: result.scenariosEnabled, ...(result.skipped.missingData ? { warning: result.firstProblem } : {}) };
+  return { campaignId: result.campaignId, queued: result.messageIds.length, free: result.free, ...(scheduledFor ? { scheduledFor: scheduledFor.toISOString() } : {}), skipped: result.skipped, scenariosEnabled: result.scenariosEnabled, ...(result.skipped.missingData ? { warning: result.firstProblem } : {}) };
 };
 
 // ---- Respuestas a plantillas que quedaron sin atender ----

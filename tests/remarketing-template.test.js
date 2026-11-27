@@ -19,7 +19,7 @@ test('resume a quién se envía y por qué se omite al resto', () => {
   const saved = process.env.REMARKETING_TEMPLATE_MAX; process.env.REMARKETING_TEMPLATE_MAX = '1';
   try {
     const summary = remarketing.audienceSummary(rows);
-    assert.deepEqual({ ...summary, recipients: summary.recipients.map((row) => row.id) }, { total: 4, scenariosPaused: 0, eligible: 1, otherChannel: 1, recent: 1, overLimit: 1, max: 1, recipients: ['a'] });
+    assert.deepEqual({ ...summary, recipients: summary.recipients.map((row) => row.id) }, { total: 4, scenariosPaused: 0, eligible: 1, inWindow: 0, otherChannel: 1, recent: 1, overLimit: 1, max: 1, recipients: ['a'] });
   } finally { if (saved === undefined) delete process.env.REMARKETING_TEMPLATE_MAX; else process.env.REMARKETING_TEMPLATE_MAX = saved; }
 });
 
@@ -102,4 +102,12 @@ test('con «Encender escenarios para todos» prende solo los chats de la columna
     assert.match(update.sql, /lead_column_id = \$2 AND scenario_enabled = false/);
     assert.deepEqual(update.args, ['org', columnId]);
   } finally { db.transaction = original.transaction; queue.outboundQueue = original.queue; realtime.publish = original.publish; }
+});
+
+test('gratis con botones: ventana abierta al momento de salir (si queda programado, a la hora de reanudar)', () => {
+  const now = new Date('2026-11-27T22:00:00Z');
+  const row = { lastInboundAt: '2026-11-27T10:00:00Z' }; // hace 12 h
+  assert.equal(remarketing.inWindowAt(row, now), true);
+  assert.equal(remarketing.inWindowAt(row, new Date('2026-11-28T09:30:00Z')), false, 'programado para la mañana: ya pasaron 23 h');
+  assert.equal(remarketing.inWindowAt({ lastInboundAt: null }, now), false, 'nunca escribió');
 });
