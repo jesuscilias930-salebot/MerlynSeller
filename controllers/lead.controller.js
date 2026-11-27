@@ -5,6 +5,9 @@ const handle = (error, res, next) => (error.status
   ? res.status(error.status).json({ error: error.message })
   : next(error));
 
+exports.moveColumn = async (req, res, next) => {
+  try { return res.json(await boards.moveColumn(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); }
+};
 exports.columnPage = async (req, res, next) => {
   try { return res.json(await leads.columnPage(req.auth.organizationId, req.auth.user.id, req.params.columnId, { offset: req.query.offset, limit: req.query.limit, filter: req.query.filter })); } catch (error) { return handle(error, res, next); }
 };

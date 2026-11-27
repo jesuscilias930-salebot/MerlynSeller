@@ -59,9 +59,59 @@ exports.list = async (organizationId, userId) => {
   });
 };
 
-/** Crea un dashboard con una sola columna: «Primer contacto». */
+// Plantilla «Campaña»: la escalera de recontacto. Los ⏳ quedan configurados en pausa (3, 4 y 7 días)
+// para activarlos cuando la campaña arranque.
+const CAMPAIGN_TEMPLATE = {
+  columns: ['Cotización', 'Remarketing 1', 'Remarketing 2', 'Remarketing 3', 'Dudas', 'Cierre', 'Pedido', 'Perdido'],
+  timeouts: [['Remarketing 1', 'Remarketing 2', 3 * 1440], ['Remarketing 2', 'Remarketing 3', 4 * 1440], ['Remarketing 3', 'Perdido', 7 * 1440]],
+};
+const sourceSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('empty') }),
+  z.object({ type: z.literal('clone'), boardId: z.string({ error: 'Elige el dashboard a copiar' }).uuid('Elige el dashboard a copiar') }),
+  z.object({ type: z.literal('template'), template: z.literal('campaign') }),
+]).optional().default({ type: 'empty' });
+
+/** Copia las columnas de otro dashboard con sus ⏳ y ⏱ (en pausa; los destinos dentro del dashboard se reapuntan). */
+const cloneColumns = async (client, organizationId, sourceBoardId, boardId) => {
+  const source = await client.query('SELECT id, name, position FROM lead_columns WHERE organization_id=$1 AND board_id=$2 ORDER BY position, created_at', [organizationId, sourceBoardId]);
+  if (!source.rows.length) fail(404, 'El dashboard a copiar ya no existe');
+  const map = new Map();
+  for (const [index, column] of source.rows.entries()) {
+    const created = await client.query('INSERT INTO lead_columns (organization_id, board_id, name, position) VALUES ($1,$2,$3,$4) RETURNING id', [organizationId, boardId, column.name, index]);
+    map.set(column.id, created.rows[0].id);
+  }
+  const remap = (id) => (id && map.get(id)) || id || null;
+  const sourceIds = [...map.keys()];
+  const timeouts = await client.query('SELECT column_id, target_column_id, wait_minutes FROM column_timeouts WHERE organization_id=$1 AND column_id = ANY($2::uuid[])', [organizationId, sourceIds]);
+  for (const row of timeouts.rows) {
+    await client.query('INSERT INTO column_timeouts (organization_id, column_id, target_column_id, wait_minutes, is_active) VALUES ($1,$2,$3,$4,false)', [organizationId, map.get(row.column_id), remap(row.target_column_id), row.wait_minutes]);
+  }
+  const followUps = await client.query('SELECT column_id, steps, final_column_id FROM follow_up_sequences WHERE organization_id=$1 AND column_id = ANY($2::uuid[])', [organizationId, sourceIds]);
+  for (const row of followUps.rows) {
+    await client.query('INSERT INTO follow_up_sequences (organization_id, column_id, is_active, steps, final_column_id) VALUES ($1,$2,false,$3::jsonb,$4)', [organizationId, map.get(row.column_id), JSON.stringify(row.steps || []), remap(row.final_column_id)]);
+  }
+  return { columns: source.rows.length, timeouts: timeouts.rows.length, followUps: followUps.rows.length };
+};
+
+const templateColumns = async (client, organizationId, boardId) => {
+  const ids = new Map();
+  for (const [index, name] of CAMPAIGN_TEMPLATE.columns.entries()) {
+    const created = await client.query('INSERT INTO lead_columns (organization_id, board_id, name, position) VALUES ($1,$2,$3,$4) RETURNING id', [organizationId, boardId, name, index]);
+    ids.set(name, created.rows[0].id);
+  }
+  for (const [from, to, minutes] of CAMPAIGN_TEMPLATE.timeouts) {
+    await client.query('INSERT INTO column_timeouts (organization_id, column_id, target_column_id, wait_minutes, is_active) VALUES ($1,$2,$3,$4,false)', [organizationId, ids.get(from), ids.get(to), minutes]);
+  }
+  return { columns: CAMPAIGN_TEMPLATE.columns.length, timeouts: CAMPAIGN_TEMPLATE.timeouts.length, followUps: 0 };
+};
+
+/**
+ * Crea un dashboard bajo demanda: vacío («Primer contacto»), copiando la estructura de otro (columnas,
+ * ⏳ y ⏱ en pausa, sin leads) o desde la plantilla de campaña.
+ */
 exports.create = async (organizationId, input) => {
   const data = parse(boardSchema, input);
+  const source = parse(sourceSchema, input?.source);
   const board = await db.transaction(async (client) => {
     const created = await client.query(
       `INSERT INTO lead_boards (organization_id, name, product, zone, position)
@@ -69,11 +119,42 @@ exports.create = async (organizationId, input) => {
        RETURNING id, name, product, zone, position, is_default AS "isDefault"`,
       [organizationId, data.name, data.product, data.zone],
     ).catch(duplicate);
-    await client.query("INSERT INTO lead_columns (organization_id, board_id, name, position) VALUES ($1, $2, 'Primer contacto', 0)", [organizationId, created.rows[0].id]);
-    return created.rows[0];
+    const boardId = created.rows[0].id;
+    let copied = { columns: 1, timeouts: 0, followUps: 0 };
+    if (source.type === 'clone') copied = await cloneColumns(client, organizationId, source.boardId, boardId);
+    else if (source.type === 'template') copied = await templateColumns(client, organizationId, boardId);
+    else await client.query("INSERT INTO lead_columns (organization_id, board_id, name, position) VALUES ($1, $2, 'Primer contacto', 0)", [organizationId, boardId]);
+    return { ...created.rows[0], copied };
   });
   await realtime.publish(organizationId, 'lead.board_created');
   return board;
+};
+
+/**
+ * Mueve una columna (con sus leads, ⏳ y ⏱) a otro dashboard; queda al final. El dashboard de origen
+ * debe conservar al menos una columna y el destino no puede tener otra con el mismo nombre.
+ */
+exports.moveColumn = async (organizationId, columnId, input) => {
+  const targetBoardId = input?.boardId;
+  if (!uuid(columnId)) fail(404, 'Columna no encontrada');
+  if (!uuid(targetBoardId)) fail(400, 'Elige el dashboard de destino');
+  const moved = await db.transaction(async (client) => {
+    const column = (await client.query('SELECT id, name, board_id FROM lead_columns WHERE id=$1 AND organization_id=$2 FOR UPDATE', [columnId, organizationId])).rows[0];
+    if (!column) fail(404, 'Columna no encontrada');
+    if (column.board_id === targetBoardId) fail(400, 'La columna ya está en ese dashboard');
+    const target = (await client.query('SELECT id, name FROM lead_boards WHERE id=$1 AND organization_id=$2', [targetBoardId, organizationId])).rows[0];
+    if (!target) fail(404, 'Dashboard no encontrado');
+    const remaining = await client.query('SELECT count(*)::int AS total FROM lead_columns WHERE board_id=$1 AND id<>$2', [column.board_id, columnId]);
+    if (!remaining.rows[0].total) fail(400, 'Cada dashboard necesita al menos una columna: agrega otra antes de mover esta');
+    const result = await client.query(
+      `UPDATE lead_columns SET board_id=$3, position=COALESCE((SELECT MAX(position)+1 FROM lead_columns WHERE board_id=$3),0)
+       WHERE id=$1 AND organization_id=$2 RETURNING id, name, board_id AS "boardId", position`,
+      [columnId, organizationId, targetBoardId],
+    ).catch((error) => { if (error.code === '23505') fail(409, `«${target.name}» ya tiene una columna llamada «${column.name}». Renómbrala antes de moverla.`); throw error; });
+    return { ...result.rows[0], boardName: target.name };
+  });
+  await realtime.publish(organizationId, 'lead.board_created');
+  return moved;
 };
 
 exports.update = async (organizationId, id, input) => {
