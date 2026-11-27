@@ -57,13 +57,14 @@ test('el tablero carga solo los leads del dashboard abierto', async () => {
   await withDb((sql) => {
     if (sql.includes('FROM lead_boards')) return { rows: [{ id: boardId }] };
     if (sql.includes('FROM lead_columns WHERE')) return { rows: [{ id: 'c1', name: 'Nuevos', position: 0, boardId }] };
-    if (sql.includes('FROM conversations c')) return { rows: [{ id: 'conv1', lead_column_id: 'c1' }] };
+    if (sql.includes('WITH ranked')) return { rows: [{ id: 'conv1', lead_column_id: 'c1', total: 1 }] };
     return null;
   }, async (calls) => {
     const columns = await leads.board('org', 'user', boardId);
     assert.equal(columns[0].leads.length, 1);
-    const leadsQuery = calls.find((call) => call.sql.includes('FROM conversations c'));
-    assert.deepEqual(leadsQuery.args, ['org', 'user', ['c1']]);
+    const leadsQuery = calls.find((call) => call.sql.includes('WITH ranked'));
+    assert.deepEqual(leadsQuery.args, ['org', 'user', ['c1'], 0, 20], 'solo las columnas del dashboard, 20 por columna');
+    assert.equal(columns[0].leadCount, 1);
   });
 });
 

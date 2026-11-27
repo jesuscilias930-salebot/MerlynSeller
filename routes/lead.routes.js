@@ -4,6 +4,7 @@ const { requireUser, requireRole } = require('../middleware/auth.middleware');
 
 router.use(requireUser);
 router.get('/board', controller.board);
+router.get('/columns/:columnId/leads', controller.columnPage);
 router.get('/boards', controller.listBoards);
 router.post('/boards', requireRole('owner', 'admin'), controller.createBoard);
 router.put('/boards/order', requireRole('owner', 'admin'), controller.reorderBoards);

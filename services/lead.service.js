@@ -53,14 +53,36 @@ exports.initialColumnId = async (client, organizationId) => {
   return result.rows[0].id;
 };
 
-// Solo se cargan los leads del dashboard abierto (antes se cargaban todos los chats).
-exports.board = async (organizationId, userId, boardId) => {
-  const resolvedBoardId = await resolveBoardId(db, organizationId, boardId);
-  const columns = await db.query(
-    'SELECT id, name, position, board_id AS "boardId" FROM lead_columns WHERE organization_id = $1 AND board_id = $2 ORDER BY position ASC, created_at ASC',
-    [organizationId, resolvedBoardId],
-  );
-  const leads = await db.query(`
+// Pendiente de respuesta y no leídos (mismas reglas que el inbox): lo anterior a nuestra respuesta no cuenta.
+const LAST_ANSWER = `COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status <> 'failed' AND answer.deleted_at IS NULL), '-infinity'::timestamptz)`;
+const NEEDS_RESPONSE = `(c.status = 'open' AND EXISTS (SELECT 1 FROM messages pending WHERE pending.conversation_id = c.id AND pending.direction = 'inbound' AND pending.created_at > ${LAST_ANSWER}))`;
+const UNREAD_COUNT = `(SELECT COUNT(*)::int FROM messages m
+  WHERE m.conversation_id = c.id AND m.direction = 'inbound'
+    AND m.created_at > GREATEST(COALESCE((SELECT last_read_at FROM conversation_read_states rs WHERE rs.conversation_id = c.id AND rs.user_id = $2), '-infinity'::timestamptz), ${LAST_ANSWER}))`;
+const FILTERS = {
+  all: 'true',
+  unread: `${UNREAD_COUNT} > 0`,
+  'needs-response': NEEDS_RESPONSE,
+};
+const LEADS_PAGE = 20;
+const MAX_LEADS_PAGE = 200;
+const pageSize = (value, fallback = LEADS_PAGE) => Math.min(MAX_LEADS_PAGE, Math.max(1, Number.parseInt(value, 10) || fallback));
+
+/**
+ * Leads de una o varias columnas, paginados por columna (más recientes primero): las filas offset+1 a
+ * offset+limit de cada columna y su total con el filtro. Los cálculos pesados (no leídos, último
+ * mensaje) solo se hacen para la página, salvo que el filtro los necesite para elegir.
+ */
+const columnLeads = async (organizationId, userId, columnIds, { limit = LEADS_PAGE, offset = 0, filter = 'all' } = {}) => {
+  const condition = FILTERS[filter] || FILTERS.all;
+  const result = await db.query(`
+    WITH ranked AS (
+      SELECT c.id, c.lead_column_id,
+        ROW_NUMBER() OVER (PARTITION BY c.lead_column_id ORDER BY c.updated_at DESC, c.id DESC) AS rn,
+        COUNT(*) OVER (PARTITION BY c.lead_column_id)::int AS total
+      FROM conversations c
+      WHERE c.organization_id = $1 AND c.lead_column_id = ANY($3::uuid[]) AND ${condition}
+    )
     SELECT
       c.id,
       c.contact_id AS "contactId",
@@ -76,32 +98,60 @@ exports.board = async (organizationId, userId, boardId) => {
       ct.username,
       latest.body AS last_message,
       latest.direction AS "lastDirection",
-      c.column_pinned_at AS "columnPinnedAt",
-      (SELECT name FROM column_rules rule WHERE rule.id = c.column_pinned_rule_id) AS "columnPinnedRule",
-      (c.status = 'open' AND EXISTS (SELECT 1 FROM messages pending WHERE pending.conversation_id = c.id AND pending.direction = 'inbound'
-      AND pending.created_at > COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status <> 'failed' AND answer.deleted_at IS NULL), '-infinity'::timestamptz))) AS "needsResponse",
-      (SELECT COUNT(*)::int FROM messages m
-        WHERE m.conversation_id = c.id
-          AND m.direction = 'inbound'
-          AND m.created_at > GREATEST(COALESCE((SELECT last_read_at FROM conversation_read_states rs WHERE rs.conversation_id = c.id AND rs.user_id = $2), '-infinity'::timestamptz),
-            -- Ya respondido (por una persona o por el CRM): lo anterior a la respuesta no queda pendiente.
-            COALESCE((SELECT max(answer.created_at) FROM messages answer WHERE answer.conversation_id = c.id AND answer.direction = 'outbound' AND answer.status <> 'failed' AND answer.deleted_at IS NULL), '-infinity'::timestamptz))
-      ) AS "unreadCount"
-    FROM conversations c
+      ${NEEDS_RESPONSE} AS "needsResponse",
+      ${UNREAD_COUNT} AS "unreadCount",
+      ranked.total
+    FROM ranked
+    JOIN conversations c ON c.id = ranked.id
     JOIN contacts ct ON ct.id = c.contact_id
     LEFT JOIN LATERAL (
-      SELECT body, direction
-      FROM messages
-      WHERE conversation_id = c.id
-      ORDER BY created_at DESC
-      LIMIT 1
+      SELECT body, direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1
     ) latest ON true
-    WHERE c.organization_id = $1 AND c.lead_column_id = ANY($3::uuid[])
-    ORDER BY c.updated_at DESC
-  `, [organizationId, userId, columns.rows.map((column) => column.id)]);
-  const byColumn = new Map(columns.rows.map((column) => [column.id, []]));
-  for (const lead of leads.rows) byColumn.get(lead.lead_column_id)?.push(lead);
-  return columns.rows.map((column) => ({ ...column, leads: byColumn.get(column.id) || [] }));
+    WHERE ranked.rn > $4 AND ranked.rn <= $4 + $5
+    ORDER BY ranked.lead_column_id, ranked.rn
+  `, [organizationId, userId, columnIds, offset, limit]);
+  // Total por columna aunque la página venga vacía (se vuelve a contar solo si hace falta).
+  const totals = new Map(result.rows.map((row) => [row.lead_column_id, row.total]));
+  const missing = columnIds.filter((id) => !totals.has(id));
+  if (missing.length) {
+    const counted = await db.query(
+      `SELECT c.lead_column_id, COUNT(*)::int AS total FROM conversations c WHERE c.organization_id = $1 AND c.lead_column_id = ANY($3::uuid[]) AND ${condition} AND $2::uuid IS NOT DISTINCT FROM $2::uuid GROUP BY c.lead_column_id`,
+      [organizationId, userId, missing],
+    );
+    for (const row of counted.rows) totals.set(row.lead_column_id, row.total);
+  }
+  const byColumn = new Map(columnIds.map((id) => [id, []]));
+  for (const { total, ...lead } of result.rows) byColumn.get(lead.lead_column_id)?.push(lead);
+  return { byColumn, totals };
+};
+
+// Solo se cargan los leads del dashboard abierto y, de cada columna, la primera página (20 por
+// defecto; al refrescar se puede pedir más para no perder lo que ya se desplazó).
+exports.board = async (organizationId, userId, boardId, options = {}) => {
+  const resolvedBoardId = await resolveBoardId(db, organizationId, boardId);
+  const columns = await db.query(
+    'SELECT id, name, position, board_id AS "boardId" FROM lead_columns WHERE organization_id = $1 AND board_id = $2 ORDER BY position ASC, created_at ASC',
+    [organizationId, resolvedBoardId],
+  );
+  const ids = columns.rows.map((column) => column.id);
+  const { byColumn, totals } = ids.length
+    ? await columnLeads(organizationId, userId, ids, { limit: pageSize(options.limit), filter: options.filter })
+    : { byColumn: new Map(), totals: new Map() };
+  return columns.rows.map((column) => ({ ...column, leads: byColumn.get(column.id) || [], leadCount: totals.get(column.id) || 0 }));
+};
+
+/** Siguiente página de una columna (scroll infinito). */
+exports.columnPage = async (organizationId, userId, columnId, options = {}) => {
+  const valid = /^[0-9a-f-]{36}$/i.test(String(columnId));
+  const column = valid ? await db.query('SELECT id FROM lead_columns WHERE id = $1 AND organization_id = $2', [columnId, organizationId]) : { rows: [] };
+  if (!column.rows[0]) {
+    const error = new Error('La columna ya no existe');
+    error.status = 404;
+    throw error;
+  }
+  const offset = Math.max(0, Number.parseInt(options.offset, 10) || 0);
+  const { byColumn, totals } = await columnLeads(organizationId, userId, [columnId], { limit: pageSize(options.limit), offset, filter: options.filter });
+  return { leads: byColumn.get(columnId) || [], leadCount: totals.get(columnId) || 0 };
 };
 
 exports.addColumn = async (organizationId, input) => {
