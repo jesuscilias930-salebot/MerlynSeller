@@ -19,6 +19,10 @@ exports.addColumn = async (req, res, next) => {
   try { return res.status(201).json(await leads.addColumn(req.auth.organizationId, req.body)); } catch (error) { return handle(error, res, next); }
 };
 
+exports.renameColumn = async (req, res, next) => {
+  try { return res.json(await leads.renameColumn(req.auth.organizationId, req.params.id, req.body)); } catch (error) { return handle(error, res, next); }
+};
+
 exports.reorderColumns = async (req, res, next) => {
   try { return res.json(await leads.reorderColumns(req.auth.organizationId, req.body)); } catch (error) { return handle(error, res, next); }
 };

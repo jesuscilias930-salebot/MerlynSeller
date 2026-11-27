@@ -220,6 +220,36 @@ exports.addColumn = async (organizationId, input) => {
   }
 };
 
+const renameSchema = z.object({ name: z.string().trim().min(2, 'El nombre necesita al menos 2 caracteres').max(80, 'El nombre admite máximo 80 caracteres') });
+/** Cambia el nombre de una columna; los leads, ⏳, ⏱, escenarios y reglas siguen ligados a ella. */
+exports.renameColumn = async (organizationId, columnId, input) => {
+  const data = validate(renameSchema, input);
+  if (!z.string().uuid().safeParse(columnId).success) {
+    const error = new Error('Columna no encontrada');
+    error.status = 404;
+    throw error;
+  }
+  try {
+    const result = await db.query(
+      'UPDATE lead_columns SET name = $3 WHERE id = $1 AND organization_id = $2 RETURNING id, name, position, board_id AS "boardId"',
+      [columnId, organizationId, data.name],
+    );
+    if (!result.rows[0]) {
+      const error = new Error('Columna no encontrada');
+      error.status = 404;
+      throw error;
+    }
+    await realtime.publish(organizationId, 'lead.column_created');
+    return result.rows[0];
+  } catch (error) {
+    if (error.code === '23505') {
+      error.status = 409;
+      error.message = 'Ya existe una columna con ese nombre en este dashboard';
+    }
+    throw error;
+  }
+};
+
 exports.reorderColumns = async (organizationId, input) => {
   const data = validate(reorderSchema, input);
   const result = await db.transaction(async (client) => {

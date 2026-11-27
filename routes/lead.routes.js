@@ -13,6 +13,7 @@ router.delete('/boards/:id', requireRole('owner', 'admin'), controller.removeBoa
 router.post('/columns', requireRole('owner', 'admin'), controller.addColumn);
 router.put('/columns/order', requireRole('owner', 'admin'), controller.reorderColumns);
 router.delete('/columns/:id', requireRole('owner', 'admin'), controller.removeColumn);
+router.patch('/columns/:id', requireRole('owner', 'admin'), controller.renameColumn);
 router.patch('/columns/:id/board', requireRole('owner', 'admin'), controller.moveColumn);
 router.patch('/columns/:id/move-leads', requireRole('owner', 'admin'), controller.moveAllFromColumn);
 router.patch('/:id/column', controller.move);

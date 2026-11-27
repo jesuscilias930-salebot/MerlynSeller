@@ -79,3 +79,25 @@ test('página siguiente de la columna de un hijo', async () => {
     await assert.rejects(leads.columnPage('org', 'user', `board:${COL}`), (error) => error.status === 404);
   } finally { db.query = original; }
 });
+
+test('renombrar columna: valida, evita duplicados en el dashboard y conserva la columna', async () => {
+  const original = db.query; const calls = [];
+  const realtime = require('../lib/realtime'); const originalPublish = realtime.publish; realtime.publish = async () => {};
+  let duplicate = false;
+  db.query = async (sql, args) => {
+    calls.push({ sql, args });
+    if (sql.startsWith('UPDATE lead_columns SET name')) {
+      if (duplicate) throw Object.assign(new Error('dup'), { code: '23505' });
+      return { rows: args[0] === COL ? [{ id: COL, name: args[2], position: 1, boardId: 'b' }] : [] };
+    }
+    return { rows: [] };
+  };
+  try {
+    assert.deepEqual(await leads.renameColumn('org', COL, { name: '  Cierre 120  ' }), { id: COL, name: 'Cierre 120', position: 1, boardId: 'b' });
+    await assert.rejects(leads.renameColumn('org', COL, { name: 'x' }), /al menos 2/);
+    await assert.rejects(leads.renameColumn('org', EMPTY, { name: 'Nueva' }), (error) => error.status === 404);
+    await assert.rejects(leads.renameColumn('org', 'nope', { name: 'Nueva' }), (error) => error.status === 404);
+    duplicate = true;
+    await assert.rejects(leads.renameColumn('org', COL, { name: 'Dudas' }), (error) => error.status === 409 && /Ya existe/.test(error.message));
+  } finally { db.query = original; realtime.publish = originalPublish; }
+});
