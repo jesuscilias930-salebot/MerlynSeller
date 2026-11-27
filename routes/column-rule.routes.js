@@ -11,6 +11,8 @@ const handle = (fn, status = 200) => async (req, res, next) => {
 const org = (req) => req.auth.organizationId;
 router.get('/', handle((req) => rules.list(org(req))));
 router.post('/', requireRole('owner', 'admin'), handle((req) => rules.create(org(req), req.body), 201));
+router.get('/ads', handle((req) => rules.ads(org(req))));
+router.post('/:id/backfill', requireRole('owner', 'admin'), handle((req) => rules.backfill(org(req), req.params.id, { dryRun: req.body?.dryRun !== false })));
 router.put('/order', requireRole('owner', 'admin'), handle((req) => rules.reorder(org(req), req.body)));
 router.put('/:id', requireRole('owner', 'admin'), handle((req) => rules.update(org(req), req.params.id, req.body)));
 router.delete('/:id', requireRole('owner', 'admin'), handle((req) => rules.remove(org(req), req.params.id)));

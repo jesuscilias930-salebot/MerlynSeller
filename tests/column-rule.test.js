@@ -32,7 +32,7 @@ test('valida la regla y quita frases repetidas', async () => {
     await rules.create('org', { name: ' Mayoreo ', phrases: ['Precio', ' precio ', 'mayoreo'], columnId });
     const insert = calls.find((call) => call.sql.includes('INSERT INTO column_rules'));
     assert.deepEqual(insert.args.slice(1, 5), ['Mayoreo', ['Precio', 'mayoreo'], 'contains', columnId]);
-    await assert.rejects(rules.create('org', { name: 'x', phrases: [], columnId }), { status: 400, message: 'Agrega al menos una frase o una lada' });
+    await assert.rejects(rules.create('org', { name: 'x', phrases: [], columnId }), { status: 400, message: 'Agrega al menos una frase, una lada o un anuncio' });
     await assert.rejects(rules.create('org', { name: 'x', phrases: ['¿?'], columnId }), { message: 'Agrega al menos una frase con letras o números' });
   } finally { db.query = original; }
 });
@@ -97,5 +97,41 @@ test('aplica una regla por lada leyendo el teléfono del contacto', async () => 
   try {
     const applied = await rules.applyIncoming('org', 'conv', { image: { id: 'img' } });
     assert.equal(applied.id, 'orizaba');
+  } finally { db.query = original.query; realtime.publish = original.publish; }
+});
+
+test('por anuncio: el primer mensaje desde el anuncio mueve sin importar el texto, y va antes que las demás', () => {
+  const byAd = rule({ id: 'anuncio120', phrases: [], adMatch: '120' });
+  const general = rule({ id: 'general', phrases: ['donde se ubican'] });
+  const referral = { source_id: '120211', headline: 'Caja Emprendedora 120 pares', body: '60 de caricatura y 60 económicos' };
+  assert.equal(rules.matchRule([general, byAd], '¿Dónde se ubican?', null, referral)?.id, 'anuncio120', 'la de anuncio va primero');
+  assert.equal(rules.matchRule([byAd], '😀', null, referral)?.id, 'anuncio120', 'cualquier mensaje');
+  assert.equal(rules.matchRule([byAd], 'hola', null, null), null, 'sin anuncio no aplica');
+  assert.equal(rules.matchRule([byAd], 'hola', null, { headline: 'Paquete 1200 pares' }), null, '«120» no coincide con «1200»');
+  assert.equal(rules.matchRule([rule({ id: 'porId', phrases: [], adMatch: '120211' })], 'hola', null, referral)?.id, 'porId', 'por id del anuncio');
+  assert.equal(rules.matchAd('caja emprendedora', { headline: 'Caja Emprendedora 120 pares' }), true);
+  assert.equal(rules.matchAd('120', { sourceId: 'x', headline: 'Caja Emprendedora 120 pares' }), true, 'referral guardado (camelCase)');
+});
+
+test('mover a los que ya llegaron por el anuncio: cuenta, mueve y respeta Descartados', async () => {
+  const original = { query: db.query, publish: realtime.publish };
+  realtime.publish = async () => {};
+  const calls = [];
+  db.query = async (sql, args) => {
+    calls.push({ sql, args });
+    if (sql.includes('FROM column_rules rule')) return { rows: [{ ...rule({ id: 'r', phrases: [], adMatch: '120' }), columnId }] };
+    if (sql.includes('SELECT DISTINCT ON (m.conversation_id)')) return { rows: [
+      { conversation_id: 'a', referral: { headline: 'Caja 120 pares' } },
+      { conversation_id: 'b', referral: { headline: 'Hoodies Essentials' } },
+    ] };
+    if (sql.startsWith('UPDATE conversations')) return { rowCount: args[1].length, rows: args[1].map((id) => ({ id })) };
+    return { rows: [] };
+  };
+  try {
+    const id = '33333333-3333-4333-8333-333333333333';
+    assert.deepEqual(await rules.backfill('org', id, { dryRun: true }), { count: 1, moved: 0 });
+    assert.ok(calls.some((call) => call.sql.includes("NOT LIKE '%descartad%'")));
+    assert.deepEqual(await rules.backfill('org', id, { dryRun: false }), { count: 1, moved: 1 });
+    assert.deepEqual(calls.find((call) => call.sql.startsWith('UPDATE conversations')).args[1], ['a']);
   } finally { db.query = original.query; realtime.publish = original.publish; }
 });

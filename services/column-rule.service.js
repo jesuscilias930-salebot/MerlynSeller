@@ -14,6 +14,8 @@ const schema = z.object({
   matchMode: z.enum(['contains', 'exact']).default('contains'),
   columnId: z.string().uuid('Elige la columna'),
   isActive: z.boolean().default(true),
+  // Anuncio de origen: palabra del título/texto del anuncio (p. ej. «120») o su id. Vacío = no importa el anuncio.
+  adMatch: z.string().trim().max(120, 'El anuncio admite máximo 120 caracteres').nullable().optional().transform((value) => value || null),
 });
 const orderSchema = z.object({ ruleIds: z.array(z.string().uuid()).min(1).max(200) });
 const fail = (status, message) => { const error = new Error(message); error.status = status; throw error; };
@@ -30,11 +32,12 @@ const parse = (input) => {
     if (!/^\d{2,3}$/.test(code)) fail(400, `«${String(item).trim()}» no es una lada válida: escribe 2 o 3 dígitos, p. ej. 272 o 55`);
     if (!areaCodes.includes(code)) areaCodes.push(code);
   }
-  if (!phrases.length && !areaCodes.length) fail(400, parsed.data.phrases.length ? 'Agrega al menos una frase con letras o números' : 'Agrega al menos una frase o una lada');
+  if (parsed.data.adMatch && !normalize(parsed.data.adMatch)) fail(400, 'Escribe una palabra o el id del anuncio');
+  if (!phrases.length && !areaCodes.length && !parsed.data.adMatch) fail(400, parsed.data.phrases.length ? 'Agrega al menos una frase con letras o números' : 'Agrega al menos una frase, una lada o un anuncio');
   return { ...parsed.data, phrases, areaCodes };
 };
 const COLUMNS = `rule.id, rule.name, rule.phrases, rule.area_codes AS "areaCodes", rule.match_mode AS "matchMode", rule.column_id AS "columnId", column_row.name AS "columnName",
-  rule.is_active AS "isActive", rule.position, rule.updated_at AS "updatedAt"`;
+  rule.is_active AS "isActive", rule.ad_match AS "adMatch", rule.position, rule.updated_at AS "updatedAt"`;
 const requireColumn = async (organizationId, columnId) => {
   const found = await db.query('SELECT 1 FROM lead_columns WHERE id=$1 AND organization_id=$2', [columnId, organizationId]);
   if (!found.rows[0]) fail(400, 'La columna elegida ya no existe');
@@ -54,9 +57,9 @@ exports.create = async (organizationId, input) => {
   const value = parse(input);
   await requireColumn(organizationId, value.columnId);
   const row = await db.query(
-    `INSERT INTO column_rules (organization_id, name, phrases, match_mode, column_id, is_active, area_codes, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE((SELECT MAX(position)+1 FROM column_rules WHERE organization_id=$1),0)) RETURNING id`,
-    [organizationId, value.name, value.phrases, value.matchMode, value.columnId, value.isActive, value.areaCodes],
+    `INSERT INTO column_rules (organization_id, name, phrases, match_mode, column_id, is_active, area_codes, ad_match, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE((SELECT MAX(position)+1 FROM column_rules WHERE organization_id=$1),0)) RETURNING id`,
+    [organizationId, value.name, value.phrases, value.matchMode, value.columnId, value.isActive, value.areaCodes, value.adMatch],
   );
   return byId(organizationId, row.rows[0].id);
 };
@@ -66,9 +69,9 @@ exports.update = async (organizationId, id, input) => {
   const value = parse(input);
   await requireColumn(organizationId, value.columnId);
   const row = await db.query(
-    `UPDATE column_rules SET name=$3, phrases=$4, match_mode=$5, column_id=$6, is_active=$7, area_codes=$8, updated_at=now()
+    `UPDATE column_rules SET name=$3, phrases=$4, match_mode=$5, column_id=$6, is_active=$7, area_codes=$8, ad_match=$9, updated_at=now()
      WHERE id=$1 AND organization_id=$2 RETURNING id`,
-    [id, organizationId, value.name, value.phrases, value.matchMode, value.columnId, value.isActive, value.areaCodes],
+    [id, organizationId, value.name, value.phrases, value.matchMode, value.columnId, value.isActive, value.areaCodes, value.adMatch],
   );
   if (!row.rows[0]) fail(404, 'Regla no encontrada');
   return byId(organizationId, id);
@@ -113,15 +116,16 @@ exports.nationalNumber = nationalNumber;
 /** Regla que coincide con el texto y la lada. «Contiene» busca la frase como palabras completas;
  *  «exacto», el mensaje completo; sin frases, cualquier mensaje. Las reglas con lada van primero
  *  (son más específicas); entre iguales gana la de más arriba. */
-const matchRule = (rules, text, phone) => {
+const matchRule = (rules, text, phone, referral = null) => {
   const value = normalize(text);
   const national = nationalNumber(phone);
   const matches = (rule) => {
     if (rule.isActive === false) return false;
+    if (rule.adMatch && !matchAd(rule.adMatch, referral)) return false;
     const codes = rule.areaCodes || [];
     if (codes.length && !(national && codes.some((code) => national.startsWith(code)))) return false;
     const phrases = rule.phrases || [];
-    if (!phrases.length) return codes.length > 0;
+    if (!phrases.length) return codes.length > 0 || Boolean(rule.adMatch);
     if (!value) return false;
     return phrases.some((item) => {
       const target = normalize(item);
@@ -129,11 +133,63 @@ const matchRule = (rules, text, phone) => {
       return rule.matchMode === 'exact' ? value === target : ` ${value} `.includes(` ${target} `);
     });
   };
-  return rules.find((rule) => (rule.areaCodes || []).length && matches(rule))
-    || rules.find((rule) => !(rule.areaCodes || []).length && matches(rule))
+  // Primero las de anuncio (las más específicas), luego las de lada y al final las demás.
+  return rules.find((rule) => rule.adMatch && matches(rule))
+    || rules.find((rule) => !rule.adMatch && (rule.areaCodes || []).length && matches(rule))
+    || rules.find((rule) => !rule.adMatch && !(rule.areaCodes || []).length && matches(rule))
     || null;
 };
 exports.matchRule = matchRule;
+
+/**
+ * ¿El anuncio de origen coincide? Id exacto del anuncio, o la palabra/frase dentro de su título, texto o
+ * enlace (palabras completas: «120» no coincide con «1200»). Acepta el referral de Meta o el guardado.
+ */
+const matchAd = (adMatch, referral) => {
+  if (!referral || typeof referral !== 'object') return false;
+  const id = String(referral.source_id || referral.sourceId || '').trim();
+  if (id && id === String(adMatch).trim()) return true;
+  const target = normalize(adMatch);
+  const text = normalize([referral.headline, referral.body, referral.source_url || referral.sourceUrl].filter(Boolean).join(' '));
+  return Boolean(target && text) && ` ${text} `.includes(` ${target} `);
+};
+exports.matchAd = matchAd;
+
+/** Anuncios que han traído chats en los últimos 90 días (para elegirlos en una regla). */
+exports.ads = async (organizationId) => (await db.query(`
+  SELECT m.referral->>'sourceId' AS "sourceId", max(m.referral->>'headline') AS headline, max(m.referral->>'body') AS body,
+    max(m.referral->>'sourceUrl') AS "sourceUrl", count(DISTINCT m.conversation_id)::int AS leads, max(m.created_at) AS "lastAt"
+  FROM messages m
+  WHERE m.organization_id = $1 AND m.direction = 'inbound' AND m.referral IS NOT NULL AND m.created_at > now() - interval '90 days'
+  GROUP BY m.referral->>'sourceId'
+  ORDER BY max(m.created_at) DESC
+  LIMIT 50`, [organizationId])).rows;
+
+/**
+ * Leads que YA llegaron por el anuncio de la regla y siguen fuera del dashboard de su columna destino:
+ * los cuenta (dryRun) o los mueve. No toca a los que están en una columna «Descartados».
+ */
+exports.backfill = async (organizationId, id, { dryRun = true } = {}) => {
+  if (!uuid(id)) fail(404, 'Regla no encontrada');
+  const rule = await byId(organizationId, id);
+  if (!rule) fail(404, 'Regla no encontrada');
+  if (!rule.adMatch) fail(400, 'Esta regla no es por anuncio');
+  const candidates = (await db.query(`
+    SELECT DISTINCT ON (m.conversation_id) m.conversation_id, m.referral
+    FROM messages m
+    JOIN conversations c ON c.id = m.conversation_id AND c.organization_id = m.organization_id
+    JOIN lead_columns current_column ON current_column.id = c.lead_column_id
+    WHERE m.organization_id = $1 AND m.direction = 'inbound' AND m.referral IS NOT NULL
+      AND current_column.board_id IS DISTINCT FROM (SELECT board_id FROM lead_columns WHERE id = $2)
+      AND translate(lower(current_column.name), 'áéíóú', 'aeiou') NOT LIKE '%descartad%'
+    ORDER BY m.conversation_id, m.created_at`, [organizationId, rule.columnId])).rows;
+  const ids = candidates.filter((row) => matchAd(rule.adMatch, row.referral)).map((row) => row.conversation_id);
+  if (dryRun || !ids.length) return { count: ids.length, moved: 0 };
+  const moved = await db.query('UPDATE conversations SET lead_column_id=$3, updated_at=now() WHERE organization_id=$1 AND id = ANY($2::uuid[]) RETURNING id', [organizationId, ids, rule.columnId]);
+  await realtime.publish(organizationId, 'lead.moved');
+  console.log(JSON.stringify({ level: 'info', message: 'Column rule backfill by ad', ruleId: id, moved: moved.rowCount }));
+  return { count: ids.length, moved: moved.rowCount };
+};
 exports.messageText = messageText;
 
 /** Aplica las reglas a un mensaje entrante. Devuelve la regla usada o null. */
@@ -145,7 +201,7 @@ exports.applyIncoming = async (organizationId, conversationId, message) => {
   const phone = rules.some((rule) => (rule.areaCodes || []).length)
     ? (await db.query('SELECT ct.phone_number FROM conversations c JOIN contacts ct ON ct.id=c.contact_id WHERE c.id=$1 AND c.organization_id=$2', [conversationId, organizationId])).rows[0]?.phone_number
     : null;
-  const rule = matchRule(rules, text, phone);
+  const rule = matchRule(rules, text, phone, message?.referral || null);
   if (!rule) return null;
   await db.query(
     `UPDATE conversations SET lead_column_id=$3, column_pinned_at=NULL, column_pinned_rule_id=NULL, updated_at=now()
